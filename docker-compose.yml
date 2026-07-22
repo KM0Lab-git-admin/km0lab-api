@@ -1,0 +1,33 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: km0lab-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: km0lab
+      MYSQL_USER: km0lab
+      MYSQL_PASSWORD: km0lab
+    ports:
+      - "3306:3306"
+    volumes:
+      - km0lab_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    container_name: km0lab-api
+    environment:
+      ENVIRONMENT: development
+      DB_HOST: mysql
+    ports:
+      - "8000:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+volumes:
+  km0lab_mysql_data:
