@@ -11,5 +11,5 @@ COPY . .
 
 EXPOSE 8000
 
-# En producción: alembic upgrade head antes de arrancar (ver README).
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Railway inyecta PORT. En producción: migraciones y luego uvicorn.
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

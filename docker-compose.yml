@@ -20,6 +20,8 @@ services:
   api:
     build: .
     container_name: km0lab-api
+    env_file:
+      - .env
     environment:
       ENVIRONMENT: development
       DB_HOST: mysql
