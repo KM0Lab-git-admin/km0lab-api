@@ -28,12 +28,14 @@ class Settings(BaseSettings):
     otp_length: int = 6
     welcome_points: int = 100  # puntos de bienvenida al registrarse
 
-    # Email (SMTP). Si no hay host, en development el código se imprime en log.
+    # Email: preferir Resend HTTP (RESEND_API_KEY). SMTP queda como fallback.
+    # Sin key ni SMTP_HOST → el OTP se imprime en log (útil en local/UAT).
+    resend_api_key: str = ""
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_user: str = ""
     smtp_password: str = ""
-    smtp_from: str = "KM0 LAB <no-reply@km0lab.com>"
+    smtp_from: str = "KM0 LAB <no-reply@email.km0lab.com>"
 
     # CORS: orígenes permitidos, separados por coma
     cors_origins: str = "http://localhost:5173,http://localhost:3000"

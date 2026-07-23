@@ -82,8 +82,10 @@ La migración inicial (`0001_initial`) crea `users` y `otp_codes`.
 ## Producción (Railway)
 
 - Variables: `ENVIRONMENT=production`, `DB_*` del MySQL gestionado,
-  `JWT_SECRET` largo y aleatorio, `SMTP_*` de un proveedor real, y
-  `CORS_ORIGINS` con los dominios de la app.
+  `JWT_SECRET` largo y aleatorio, `CORS_ORIGINS` con los dominios de la
+  app, y email:
+  - **Recomendado:** `RESEND_API_KEY` + `SMTP_FROM` (API HTTP de Resend;
+    evita timeouts SMTP:587 en Railway).
+  - Alternativa: `SMTP_*` clásico.
 - Pipeline de arranque: `alembic upgrade head` y luego `uvicorn`.
-- Sin `SMTP_HOST` NO se envían correos: configúralo antes de abrir al
-  público.
+- Sin `RESEND_API_KEY` ni `SMTP_HOST` el OTP solo se imprime en el log.
