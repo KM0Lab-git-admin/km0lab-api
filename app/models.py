@@ -49,6 +49,9 @@ class OtpCode(Base):
     code_hash: Mapped[str] = mapped_column(String(64))
     expires_at: Mapped[datetime] = mapped_column(DateTime)
     consumed: Mapped[int] = mapped_column(Integer, default=0)  # 0 | 1
+    # Intentos fallidos de verificación; al llegar al máximo se invalida
+    # (anti fuerza bruta del código de 6 dígitos).
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )

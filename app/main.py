@@ -9,10 +9,13 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from app.api import auth, users
 from app.config import get_settings
 from app.db import Base, engine
+from app.ratelimit import limiter
 
 logging.basicConfig(level=logging.INFO)
 settings = get_settings()
@@ -34,6 +37,11 @@ app = FastAPI(
     description="Backend de la app KM0 LAB: usuarios y autenticación.",
     lifespan=lifespan,
 )
+
+# Rate limiting (slowapi) — protege los endpoints de auth de spam y de
+# fuerza bruta del código OTP.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
