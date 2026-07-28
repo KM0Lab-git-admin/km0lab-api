@@ -1,8 +1,4 @@
-"""KM0 LAB API — backend de la app (usuarios + auth OTP por email).
-
-MVP: solo usuarios. Puntos (libro mayor), comercios, QR y recompensas
-están mockeados en la app y se añadirán aquí como módulos nuevos.
-"""
+"""KM0 LAB API — domain backend (auth, towns, shops, points, rewards)."""
 
 import logging
 from contextlib import asynccontextmanager
@@ -12,7 +8,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from app.api import auth, users
+from app.api import (
+    actions,
+    auth,
+    promotions,
+    redemptions,
+    residents,
+    rewards,
+    scans,
+    shops,
+    stats,
+    towns,
+    users,
+)
 from app.config import get_settings
 from app.db import Base, engine
 from app.ratelimit import limiter
@@ -23,8 +31,6 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Dev: crea las tablas si no existen. En producción, usar Alembic
-    # (alembic upgrade head) y NO depender de esto.
     if settings.environment == "development":
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
@@ -33,13 +39,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="KM0 LAB API",
-    version="0.1.0",
-    description="Backend de la app KM0 LAB: usuarios y autenticación.",
+    version="0.2.0",
+    description=(
+        "Backend KM0 LAB: auth OTP, towns, shops, promotions, "
+        "point actions, rewards, redemptions, QR scans."
+    ),
     lifespan=lifespan,
 )
 
-# Rate limiting (slowapi) — protege los endpoints de auth de spam y de
-# fuerza bruta del código OTP.
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -52,10 +59,22 @@ app.add_middleware(
 )
 
 API_V1 = "/api/v1"
-app.include_router(auth.router, prefix=API_V1)
-app.include_router(users.router, prefix=API_V1)
+for module in (
+    auth,
+    users,
+    towns,
+    shops,
+    promotions,
+    actions,
+    rewards,
+    redemptions,
+    scans,
+    residents,
+    stats,
+):
+    app.include_router(module.router, prefix=API_V1)
 
 
 @app.get(f"{API_V1}/health", tags=["health"])
 async def health():
-    return {"status": "healthy", "version": "0.1.0"}
+    return {"status": "healthy", "version": "0.2.0"}

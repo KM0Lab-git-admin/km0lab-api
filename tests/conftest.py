@@ -1,7 +1,6 @@
-"""Fixtures de test: app FastAPI con una BD SQLite en memoria (compartida
-vía StaticPool) sustituyendo MySQL, y un cliente HTTP async."""
+"""Test fixtures: in-memory SQLite + HTTP client; OTP capture without email."""
 
-import logging
+from __future__ import annotations
 
 import pytest
 import pytest_asyncio
@@ -9,53 +8,63 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-import app.db as db_module
 from app.db import Base, get_db
 from app.main import app
-
-
-@pytest.fixture(scope="session")
-def event_loop_policy():
-    import asyncio
-
-    return asyncio.get_event_loop_policy()
+from app.ratelimit import limiter
 
 
 @pytest_asyncio.fixture
-async def client(monkeypatch):
-    engine = create_async_engine(
+async def engine():
+    eng = create_async_engine(
         "sqlite+aiosqlite://",
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
-
-    async with engine.begin() as conn:
+    async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    yield eng
+    await eng.dispose()
+
+
+@pytest_asyncio.fixture
+async def db_session(engine):
+    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_maker() as session:
+        yield session
+
+
+@pytest_asyncio.fixture
+async def client(engine, monkeypatch):
+    # Disable rate limits in tests (shared IP would hit 5/hour across cases).
+    monkeypatch.setattr(limiter, "enabled", False)
+
+    last_otp: dict[str, str] = {"code": ""}
+
+    async def fake_send_otp(to: str, code: str) -> None:
+        last_otp["code"] = code
+
+    monkeypatch.setattr("app.api.auth.send_otp_email", fake_send_otp)
+
+    session_maker = async_sessionmaker(engine, expire_on_commit=False)
 
     async def override_get_db():
         async with session_maker() as session:
             yield session
 
     app.dependency_overrides[get_db] = override_get_db
+    app.state.last_otp = last_otp  # type: ignore[attr-defined]
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
     app.dependency_overrides.clear()
-    await engine.dispose()
 
 
 @pytest.fixture
-def capture_otp(caplog):
-    """Devuelve una función que extrae el último OTP registrado en el log
-    (en dev sin SMTP, el código se loguea)."""
+def capture_otp(client):
+    """Return the last OTP issued by the fake email sender."""
 
     def _last_code() -> str | None:
-        for record in reversed(caplog.records):
-            msg = record.getMessage()
-            if "OTP para" in msg:
-                return msg.split(":")[-1].split("(")[0].strip()
-        return None
+        code = getattr(app.state, "last_otp", {}).get("code") or None
+        return code
 
-    caplog.set_level(logging.WARNING, logger="km0lab-api.email")
     return _last_code

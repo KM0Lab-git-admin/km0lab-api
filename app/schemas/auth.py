@@ -1,5 +1,3 @@
-"""Schemas Pydantic (request/response). Contrato de la API."""
-
 from datetime import datetime
 
 from pydantic import BaseModel, EmailStr, Field
@@ -22,6 +20,11 @@ class UserOut(BaseModel):
     postal_code: str | None
     town: str | None
     points: int
+    role: str
+    town_id: str | None = None
+    shop_id: str | None = None
+    phone: str | None = None
+    contact_shared: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -31,13 +34,6 @@ class AuthOut(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserOut
-
-
-class UpdateUserIn(BaseModel):
-    name: str | None = Field(default=None, max_length=120)
-    lang: str | None = Field(default=None, pattern="^(ca|es|en)$")
-    postal_code: str | None = Field(default=None, max_length=10)
-    town: str | None = Field(default=None, max_length=120)
 
 
 class MessageOut(BaseModel):

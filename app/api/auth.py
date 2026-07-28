@@ -1,9 +1,8 @@
-"""Auth por OTP de email: pedir código y verificarlo (registro = primer
-login). Al verificar, si el usuario no existe se crea con los puntos de
-bienvenida y se devuelve un JWT.
+"""Email OTP auth: request code and verify (signup = first login).
 
-Protecciones: rate limit por IP (slowapi) en ambos endpoints y corte por
-número de intentos fallidos por código (anti fuerza bruta)."""
+On verify, new users get welcome points via the ledger and a JWT that
+embeds role + town/shop scope.
+"""
 
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -19,6 +18,7 @@ from app.models import OtpCode, User
 from app.ratelimit import MAX_OTP_ATTEMPTS, limiter
 from app.schemas import AuthOut, MessageOut, RequestOtpIn, UserOut, VerifyOtpIn
 from app.security import create_access_token, hash_otp, verify_otp
+from app.services.points import apply_points
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 settings = get_settings()
@@ -35,9 +35,6 @@ async def request_otp(
     payload: RequestOtpIn,
     db: AsyncSession = Depends(get_db),
 ):
-    """Genera un OTP, lo guarda (hasheado) y lo envía por email. Responde
-    igual exista o no el email (no filtra si hay cuenta). Invalida los
-    códigos previos no usados del mismo email."""
     email = payload.email.lower()
     await db.execute(
         update(OtpCode)
@@ -85,7 +82,6 @@ async def verify_otp_endpoint(
         raise bad
 
     if not verify_otp(payload.code, otp.code_hash):
-        # Suma intento; si supera el máximo, invalida el código.
         consumed = 1 if otp.attempts + 1 >= MAX_OTP_ATTEMPTS else 0
         await db.execute(
             update(OtpCode)
@@ -102,14 +98,51 @@ async def verify_otp_endpoint(
     user = (
         await db.execute(select(User).where(User.email == email))
     ).scalars().first()
-    if not user:
-        user = User(email=email, points=settings.welcome_points)
-        db.add(user)
+    is_new = user is None
+    if is_new:
+        # Check pending merchant invitation by contact_email on a shop.
+        from app.models import Shop
+
+        shop = (
+            await db.execute(
+                select(Shop).where(
+                    Shop.contact_email == email,
+                    Shop.status == "pending",
+                )
+            )
+        ).scalars().first()
+        if shop:
+            user = User(
+                email=email,
+                role="merchant",
+                town_id=shop.town_id,
+                shop_id=shop.id,
+                points=0,
+            )
+            db.add(user)
+            await db.flush()
+            shop.status = "active"
+        else:
+            user = User(email=email, role="resident", points=0)
+            db.add(user)
+            await db.flush()
+            await apply_points(
+                db,
+                user=user,
+                points=settings.welcome_points,
+                type="welcome",
+                description="Welcome bonus",
+            )
 
     await db.commit()
     await db.refresh(user)
 
     return AuthOut(
-        access_token=create_access_token(user.id),
+        access_token=create_access_token(
+            user.id,
+            role=user.role,
+            town_id=user.town_id,
+            shop_id=user.shop_id,
+        ),
         user=UserOut.model_validate(user),
     )
