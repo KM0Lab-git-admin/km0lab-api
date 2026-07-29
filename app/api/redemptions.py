@@ -15,9 +15,11 @@ from app.schemas import (
     RedemptionOut,
     RedemptionStatusUpdate,
     RedemptionUseIn,
+    RedemptionValidateIn,
 )
 from app.services.points import apply_points
 from app.services.towns import assign_user_to_town
+from app.services.voucher_codes import allocate_voucher_code
 
 router = APIRouter(prefix="/redemptions", tags=["redemptions"])
 
@@ -46,6 +48,26 @@ async def _load(db: AsyncSession, redemption_id: str) -> Redemption | None:
     ).scalars().first()
 
 
+async def _mark_used(
+    db: AsyncSession,
+    redemption: Redemption,
+    *,
+    shop_id: str | None,
+    amount_applied: str | None,
+) -> None:
+    redemption.status = "used"
+    redemption.used_at = datetime.now(timezone.utc)
+    applied = amount_applied if amount_applied is not None else redemption.amount
+    redemption.amount_applied = applied
+    if not redemption.shop_id:
+        redemption.shop_id = shop_id
+    db.add(
+        RedemptionEvent(
+            redemption_id=redemption.id, status="used", note="Voucher used"
+        )
+    )
+
+
 @router.post("", response_model=RedemptionOut, status_code=status.HTTP_201_CREATED)
 async def create_redemption(
     payload: RedemptionCreate,
@@ -67,6 +89,7 @@ async def create_redemption(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Insufficient points")
 
     flow = derive_flow(reward.type)
+    code = await allocate_voucher_code(db) if flow == "voucher_qr" else None
     redemption = Redemption(
         town_id=reward.town_id,
         user_id=user.id,
@@ -74,6 +97,7 @@ async def create_redemption(
         flow=flow,
         points_spent=reward.points_required,
         status=initial_status(flow),
+        code=code,
         amount=payload.amount,
         shop_id=payload.shop_id,
         is_fake=user.is_fake,
@@ -149,6 +173,51 @@ async def list_redemptions(
     return [_to_out(r) for r in rows]
 
 
+@router.post("/validate", response_model=RedemptionOut)
+async def validate_voucher(
+    payload: RedemptionValidateIn,
+    user: User = Depends(require_merchant),
+    db: AsyncSession = Depends(get_db),
+):
+    """Merchant validates a voucher by its 5-digit code (lookup + use)."""
+    redemption = (
+        await db.execute(
+            select(Redemption)
+            .options(selectinload(Redemption.events))
+            .where(
+                Redemption.code == payload.code,
+                Redemption.flow == "voucher_qr",
+                Redemption.is_fake.is_(user.is_fake),
+            )
+        )
+    ).scalars().first()
+    if not redemption:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Voucher not found")
+    if redemption.shop_id and redemption.shop_id != user.shop_id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Out of shop scope")
+    if redemption.status == "used":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, detail="already_used"
+        )
+    if redemption.status == "cancelled":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, detail="cancelled"
+        )
+    if redemption.status != "pending_use":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, detail="Not pending use"
+        )
+    await _mark_used(
+        db,
+        redemption,
+        shop_id=user.shop_id,
+        amount_applied=payload.amount_applied,
+    )
+    await db.commit()
+    redemption = await _load(db, redemption.id)
+    return _to_out(redemption)  # type: ignore[arg-type]
+
+
 @router.patch("/{redemption_id}/status", response_model=RedemptionOut)
 async def update_status(
     redemption_id: str,
@@ -190,15 +259,11 @@ async def use_voucher(
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Out of shop scope")
     if redemption.status != "pending_use":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Not pending use")
-    redemption.status = "used"
-    redemption.used_at = datetime.now(timezone.utc)
-    redemption.amount_applied = payload.amount_applied
-    if not redemption.shop_id:
-        redemption.shop_id = user.shop_id
-    db.add(
-        RedemptionEvent(
-            redemption_id=redemption.id, status="used", note="Voucher used"
-        )
+    await _mark_used(
+        db,
+        redemption,
+        shop_id=user.shop_id,
+        amount_applied=payload.amount_applied,
     )
     await db.commit()
     redemption = await _load(db, redemption_id)

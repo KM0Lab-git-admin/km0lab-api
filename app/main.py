@@ -11,6 +11,7 @@ from slowapi.errors import RateLimitExceeded
 from app.api import (
     actions,
     auth,
+    payments,
     points,
     promotions,
     redemptions,
@@ -72,6 +73,7 @@ for module in (
     points,
     rewards,
     redemptions,
+    payments,
     scans,
     residents,
     stats,

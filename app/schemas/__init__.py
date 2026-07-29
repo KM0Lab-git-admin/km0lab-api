@@ -26,7 +26,9 @@ from app.schemas.redemptions import (
     RedemptionOut,
     RedemptionStatusUpdate,
     RedemptionUseIn,
+    RedemptionValidateIn,
 )
+from app.schemas.payments import ShopDebtOut, ShopPaymentCreate, ShopPaymentOut
 from app.schemas.scans import ScanIn, ScanOut
 from app.schemas.residents import ResidentOut, ResidentActivityOut
 from app.schemas.stats import AdminStatsOut, MerchantStatsOut
@@ -69,6 +71,10 @@ __all__ = [
     "RedemptionOut",
     "RedemptionStatusUpdate",
     "RedemptionUseIn",
+    "RedemptionValidateIn",
+    "ShopDebtOut",
+    "ShopPaymentCreate",
+    "ShopPaymentOut",
     "ScanIn",
     "ScanOut",
     "ResidentOut",

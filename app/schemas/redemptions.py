@@ -19,10 +19,12 @@ class RedemptionOut(BaseModel):
     flow: str
     points_spent: int
     status: str
+    code: str | None = None
     amount: str | None
     shop_id: str | None
     used_at: datetime | None
     amount_applied: str | None
+    payment_id: str | None = None
     delivered_at: datetime | None
     requested_at: datetime
     is_fake: bool = False
@@ -50,4 +52,11 @@ class RedemptionStatusUpdate(BaseModel):
 class RedemptionUseIn(BaseModel):
     """Merchant marks a voucher_qr redemption as used."""
 
+    amount_applied: str | None = None
+
+
+class RedemptionValidateIn(BaseModel):
+    """Merchant validates a voucher by its 5-digit code."""
+
+    code: str = Field(pattern=r"^\d{5}$")
     amount_applied: str | None = None

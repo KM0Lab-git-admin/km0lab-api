@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
@@ -16,6 +17,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     LargeBinary,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -478,6 +480,8 @@ class Redemption(Base):
     flow: Mapped[str] = mapped_column(String(20))  # voucher_qr | delivery
     points_spent: Mapped[int] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(30), index=True)
+    # voucher_qr: 5-digit code shown to the merchant (null for delivery flow)
+    code: Mapped[str | None] = mapped_column(String(5), default=None, unique=True)
     # voucher_qr fields
     amount: Mapped[str | None] = mapped_column(String(80), default=None)
     shop_id: Mapped[str | None] = mapped_column(
@@ -485,6 +489,10 @@ class Redemption(Base):
     )
     used_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     amount_applied: Mapped[str | None] = mapped_column(String(80), default=None)
+    # Settlement to the shop (used vouchers only); null = pending payment.
+    payment_id: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("shop_payments.id"), default=None, index=True
+    )
     # delivery fields
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     requested_at: Mapped[datetime] = mapped_column(
@@ -500,6 +508,26 @@ class Redemption(Base):
 
     events: Mapped[list[RedemptionEvent]] = relationship(
         "RedemptionEvent", cascade="all, delete-orphan", lazy="selectin"
+    )
+
+
+class ShopPayment(Base):
+    """Manual settlement from town hall to a shop for used vouchers."""
+
+    __tablename__ = "shop_payments"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    town_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("towns.id"), index=True
+    )
+    shop_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("shops.id"), index=True
+    )
+    total_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    note: Mapped[str | None] = mapped_column(String(255), default=None)
+    is_fake: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now()
     )
 
 

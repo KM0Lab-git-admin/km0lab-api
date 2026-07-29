@@ -439,3 +439,221 @@ async def test_points_history_balance_and_filters(
     )
     assert r.status_code == 200
     assert all(i["points"] < 0 for i in r.json()["items"])
+
+
+async def test_shop_payment_settles_used_vouchers(
+    client, db_session, capture_otp
+):
+    town, cp = await _create_town(db_session, postal_code="08387")
+    shop = Shop(
+        town_id=town.id,
+        name="Cafè del Port",
+        categories=[],
+        contact_email="cafe-pay@test.cat",
+        visit_points=10,
+        status="active",
+        qr_code="PAYQR",
+    )
+    reward = Reward(
+        town_id=town.id,
+        name="Val 10€",
+        description="Saldo de 10€",
+        type="balance",
+        points_required=100,
+        value="10€",
+        status="active",
+    )
+    db_session.add_all([shop, reward])
+    await db_session.flush()
+    admin = User(
+        email="admin-pay@test.cat",
+        slug="admin-pay",
+        postal_code=cp,
+        points=0,
+        **flags_from_roles(["admin", "resident"]),
+    )
+    merchant = User(
+        email="merchant-pay@test.cat",
+        slug="merchant-pay",
+        postal_code=cp,
+        shop_id=shop.id,
+        points=0,
+        **flags_from_roles(["merchant", "resident"]),
+    )
+    db_session.add_all([admin, merchant])
+    await db_session.commit()
+
+    # Resident redeems a balance voucher.
+    await client.post("/api/v1/auth/request-otp", json={"email": "payer@test.cat"})
+    code = capture_otp()
+    r = await client.post(
+        "/api/v1/auth/verify-otp", json={"email": "payer@test.cat", "code": code}
+    )
+    resident_headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    await client.patch(
+        "/api/v1/users/me", headers=resident_headers, json={"postal_code": cp}
+    )
+    r = await client.post(
+        "/api/v1/redemptions",
+        headers=resident_headers,
+        json={"reward_id": reward.id, "amount": "10€"},
+    )
+    assert r.status_code == 201, r.text
+    redemption_id = r.json()["id"]
+    assert r.json()["payment_id"] is None
+    voucher_code = r.json()["code"]
+    assert voucher_code and len(voucher_code) == 5 and voucher_code.isdigit()
+
+    # Merchant marks the voucher as used.
+    merchant_token = create_access_token(
+        merchant.id, roles=["merchant", "resident"], town_id=town.id
+    )
+    r = await client.post(
+        f"/api/v1/redemptions/{redemption_id}/use",
+        headers={"Authorization": f"Bearer {merchant_token}"},
+        json={"amount_applied": "10€"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "used"
+
+    admin_token = create_access_token(
+        admin.id, roles=["admin", "resident"], town_id=town.id
+    )
+    admin_headers = {"Authorization": f"Bearer {admin_token}"}
+
+    # Debt shows up aggregated per shop.
+    r = await client.get("/api/v1/payments/debts", headers=admin_headers)
+    assert r.status_code == 200, r.text
+    debts = r.json()
+    assert len(debts) == 1
+    assert debts[0]["shop_id"] == shop.id
+    assert debts[0]["pending_count"] == 1
+    assert debts[0]["pending_amount"] == 10.0
+    assert debts[0]["paid_total"] == 0.0
+
+    # Admin settles the voucher.
+    r = await client.post(
+        "/api/v1/payments",
+        headers=admin_headers,
+        json={
+            "shop_id": shop.id,
+            "redemption_ids": [redemption_id],
+            "note": "Liquidació de prova",
+        },
+    )
+    assert r.status_code == 201, r.text
+    payment = r.json()
+    assert payment["total_amount"] == 10.0
+    assert payment["redemption_ids"] == [redemption_id]
+    assert payment["shop_name"] == "Cafè del Port"
+
+    # Paying twice is rejected.
+    r = await client.post(
+        "/api/v1/payments",
+        headers=admin_headers,
+        json={"shop_id": shop.id, "redemption_ids": [redemption_id]},
+    )
+    assert r.status_code == 400
+
+    # Debts reflect the settlement and the voucher carries payment_id.
+    r = await client.get("/api/v1/payments/debts", headers=admin_headers)
+    debts = r.json()
+    assert debts[0]["pending_count"] == 0
+    assert debts[0]["pending_amount"] == 0.0
+    assert debts[0]["paid_total"] == 10.0
+
+    r = await client.get("/api/v1/redemptions", headers=admin_headers)
+    match = next(x for x in r.json() if x["id"] == redemption_id)
+    assert match["payment_id"] == payment["id"]
+
+    r = await client.get("/api/v1/payments", headers=admin_headers)
+    assert len(r.json()) == 1
+    assert r.json()[0]["redemption_ids"] == [redemption_id]
+
+
+async def test_merchant_validates_voucher_by_code(client, db_session, capture_otp):
+    town, cp = await _create_town(db_session, postal_code="08388")
+    shop = Shop(
+        town_id=town.id,
+        name="Fleca Validate",
+        categories=[],
+        contact_email="fleca-val@test.cat",
+        visit_points=10,
+        status="active",
+        qr_code="VALQR",
+    )
+    reward = Reward(
+        town_id=town.id,
+        name="Bono 5€",
+        description="Saldo",
+        type="balance",
+        points_required=50,
+        value="5€",
+        status="active",
+    )
+    db_session.add_all([shop, reward])
+    await db_session.flush()
+    merchant = User(
+        email="merchant-val@test.cat",
+        slug="merchant-val",
+        postal_code=cp,
+        shop_id=shop.id,
+        points=0,
+        **flags_from_roles(["merchant", "resident"]),
+    )
+    db_session.add(merchant)
+    await db_session.commit()
+
+    await client.post("/api/v1/auth/request-otp", json={"email": "val-user@test.cat"})
+    otp = capture_otp()
+    r = await client.post(
+        "/api/v1/auth/verify-otp",
+        json={"email": "val-user@test.cat", "code": otp},
+    )
+    headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    await client.patch(
+        "/api/v1/users/me", headers=headers, json={"postal_code": cp}
+    )
+    r = await client.post(
+        "/api/v1/redemptions",
+        headers=headers,
+        json={"reward_id": reward.id, "amount": "5€"},
+    )
+    assert r.status_code == 201, r.text
+    voucher_code = r.json()["code"]
+    assert voucher_code and len(voucher_code) == 5
+    assert r.json()["status"] == "pending_use"
+    assert r.json()["shop_id"] is None
+
+    merchant_token = create_access_token(
+        merchant.id, roles=["merchant", "resident"], town_id=town.id
+    )
+    m_headers = {"Authorization": f"Bearer {merchant_token}"}
+
+    r = await client.post(
+        "/api/v1/redemptions/validate",
+        headers=m_headers,
+        json={"code": voucher_code},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "used"
+    assert body["shop_id"] == shop.id
+    assert body["amount_applied"] == "5€"
+    assert body["code"] == voucher_code
+
+    # Second validate fails as already used.
+    r = await client.post(
+        "/api/v1/redemptions/validate",
+        headers=m_headers,
+        json={"code": voucher_code},
+    )
+    assert r.status_code == 400
+    assert r.json()["detail"] == "already_used"
+
+    r = await client.post(
+        "/api/v1/redemptions/validate",
+        headers=m_headers,
+        json={"code": "99999"},
+    )
+    assert r.status_code == 404

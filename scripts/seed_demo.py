@@ -18,8 +18,9 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 
 from app.catalog.point_actions import ensure_town_point_actions
 from app.catalog.rewards import seed_fake_rewards
@@ -34,11 +35,14 @@ from app.demo import (
 from app.models import (
     PointAction,
     Promotion,
+    Redemption,
+    RedemptionEvent,
     Reward,
     RewardMedia,
     RewardShop,
     Shop,
     ShopMedia,
+    ShopPayment,
     Town,
     TownPostalCode,
     User,
@@ -771,7 +775,7 @@ async def _malgrat(db) -> Town:
 
 async def _purge_fake(db) -> None:
     """Remove previous fake catalog (keep real rows). Demo users recreated below."""
-    from app.models import PointsTransaction, QrScan, Redemption, RedemptionEvent
+    from app.models import PointsTransaction, QrScan
 
     fake_user_ids = (
         await db.execute(select(User.id).where(User.is_fake.is_(True)))
@@ -783,7 +787,14 @@ async def _purge_fake(db) -> None:
         await db.execute(select(Reward.id).where(Reward.is_fake.is_(True)))
     ).scalars().all()
     fake_redemptions = (
-        await db.execute(select(Redemption.id).where(Redemption.is_fake.is_(True)))
+        await db.execute(
+            select(Redemption.id).where(
+                or_(
+                    Redemption.is_fake.is_(True),
+                    Redemption.user_id.in_(fake_user_ids or [""]),
+                )
+            )
+        )
     ).scalars().all()
 
     if fake_redemptions:
@@ -795,9 +806,22 @@ async def _purge_fake(db) -> None:
         await db.execute(
             delete(Redemption).where(Redemption.id.in_(fake_redemptions))
         )
-    await db.execute(delete(QrScan).where(QrScan.is_fake.is_(True)))
+    await db.execute(delete(ShopPayment).where(ShopPayment.is_fake.is_(True)))
     await db.execute(
-        delete(PointsTransaction).where(PointsTransaction.is_fake.is_(True))
+        delete(QrScan).where(
+            or_(
+                QrScan.is_fake.is_(True),
+                QrScan.user_id.in_(fake_user_ids or [""]),
+            )
+        )
+    )
+    await db.execute(
+        delete(PointsTransaction).where(
+            or_(
+                PointsTransaction.is_fake.is_(True),
+                PointsTransaction.user_id.in_(fake_user_ids or [""]),
+            )
+        )
     )
     if fake_rewards:
         await db.execute(
@@ -878,6 +902,376 @@ def _promos_for_shop(shop: Shop, category: str) -> list[Promotion]:
             )
         )
     return out
+
+
+def _shop_by_name(shops: list[Shop], name: str) -> Shop:
+    return next(s for s in shops if s.name == name)
+
+
+async def _seed_fake_redemptions(
+    db,
+    *,
+    town: Town,
+    participants: list[User],
+    shops: list[Shop],
+    fleca: Shop,
+) -> tuple[int, int, list[str]]:
+    """Fake redemptions covering every voucher/delivery state + payments.
+
+    Includes Fleca del Port vals for /comerc/vals (fixed codes 10001–10003
+    pending, used unpaid, and one settled payment).
+    """
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    rewards = {
+        r.name: r
+        for r in (
+            await db.execute(
+                select(Reward).where(
+                    Reward.is_fake.is_(True), Reward.town_id == town.id
+                )
+            )
+        ).scalars().all()
+    }
+    forn = _shop_by_name(shops, "[DEMO] Forn Can Riera")
+    cafe = _shop_by_name(shops, "[DEMO] Cafè Marítim")
+    llibreria = _shop_by_name(shops, "[DEMO] Llibreria Lletraferit")
+    by_email = {u.email: u for u in participants}
+
+    # Top-up so every participant can afford their redemptions.
+    for user in participants:
+        await apply_points(
+            db,
+            user=user,
+            points=1200,
+            type="action",
+            town_id=town.id,
+            description="[DEMO] Punts per accions al programa",
+        )
+
+    created: list[Redemption] = []
+    code_seq = 20000
+    fleca_pending_codes: list[str] = []
+
+    async def _redeem(
+        *,
+        email: str,
+        reward_name: str,
+        status: str,
+        requested_days_ago: float,
+        history: tuple[str, ...] = (),
+        shop: Shop | None = None,
+        amount: str | None = None,
+        amount_applied: str | None = None,
+        used_days_ago: float | None = None,
+        delivered_days_ago: float | None = None,
+        code: str | None = None,
+    ) -> Redemption:
+        nonlocal code_seq
+        user = by_email[email]
+        reward = rewards[reward_name]
+        flow = (
+            "voucher_qr" if reward.type in ("discount", "balance") else "delivery"
+        )
+        voucher_code = code
+        if flow == "voucher_qr" and voucher_code is None:
+            code_seq += 1
+            voucher_code = str(code_seq)
+        requested_at = now - timedelta(days=requested_days_ago)
+        redemption = Redemption(
+            id=_id(),
+            town_id=town.id,
+            user_id=user.id,
+            reward_id=reward.id,
+            flow=flow,
+            points_spent=reward.points_required,
+            status=status,
+            code=voucher_code,
+            amount=amount,
+            shop_id=shop.id if shop else None,
+            used_at=(
+                now - timedelta(days=used_days_ago)
+                if used_days_ago is not None
+                else None
+            ),
+            amount_applied=amount_applied,
+            delivered_at=(
+                now - timedelta(days=delivered_days_ago)
+                if delivered_days_ago is not None
+                else None
+            ),
+            requested_at=requested_at,
+            is_fake=True,
+            created_at=requested_at,
+        )
+        db.add(redemption)
+        if reward.stock is not None and reward.stock > 0:
+            reward.stock -= 1
+        await db.flush()
+        # One event per transition, spread between request date and now.
+        states = list(history) + [status]
+        step = requested_days_ago / len(states)
+        for i, state in enumerate(states):
+            db.add(
+                RedemptionEvent(
+                    id=_id(),
+                    redemption_id=redemption.id,
+                    status=state,
+                    note="Created" if i == 0 else None,
+                    is_fake=True,
+                    created_at=requested_at + timedelta(days=step * i),
+                )
+            )
+        await apply_points(
+            db,
+            user=user,
+            points=-reward.points_required,
+            type="redemption",
+            town_id=town.id,
+            ref_id=redemption.id,
+            description=f"[DEMO] Bescanvi {reward.name}",
+        )
+        created.append(redemption)
+        return redemption
+
+    used_history = ("pending_use",)
+
+    # ── Fleca: pending codes for /comerc/vals (merchant validates) ──
+    for code, reward_name, amount, email, days in (
+        ("10001", "[DEMO] Bono 5 €", "5€", "veci1.demo@km0lab.com", 0.3),
+        ("10002", "[DEMO] Bono 10 €", "10€", "veci2.demo@km0lab.com", 0.8),
+        ("10003", "[DEMO] Bono 20 €", "20€", "veci4.demo@km0lab.com", 1.2),
+    ):
+        await _redeem(
+            email=email,
+            reward_name=reward_name,
+            status="pending_use",
+            requested_days_ago=days,
+            amount=amount,
+            code=code,
+        )
+        fleca_pending_codes.append(code)
+
+    # ── Fleca: used unpaid (historial + KPI pendent) ────────────────
+    await _redeem(
+        email="veci3.demo@km0lab.com",
+        reward_name="[DEMO] Bono 5 €",
+        status="used",
+        requested_days_ago=4,
+        history=used_history,
+        shop=fleca,
+        amount="5€",
+        amount_applied="5€",
+        used_days_ago=2,
+        code="10011",
+    )
+    await _redeem(
+        email="veci5.demo@km0lab.com",
+        reward_name="[DEMO] Bono 10 €",
+        status="used",
+        requested_days_ago=6,
+        history=used_history,
+        shop=fleca,
+        amount="10€",
+        amount_applied="10€",
+        used_days_ago=3,
+        code="10012",
+    )
+
+    # ── Fleca: used + settled (~15 €) for "Cobrats" ─────────────────
+    fleca_paid_a = await _redeem(
+        email=DEMO_RESIDENT_EMAIL,
+        reward_name="[DEMO] Bono 5 €",
+        status="used",
+        requested_days_ago=18,
+        history=used_history,
+        shop=fleca,
+        amount="5€",
+        amount_applied="5€",
+        used_days_ago=16,
+        code="10013",
+    )
+    fleca_paid_b = await _redeem(
+        email="veci1.demo@km0lab.com",
+        reward_name="[DEMO] Bono 10 €",
+        status="used",
+        requested_days_ago=17,
+        history=used_history,
+        shop=fleca,
+        amount="10€",
+        amount_applied="10€",
+        used_days_ago=15,
+        code="10014",
+    )
+    fleca_payment = ShopPayment(
+        id=_id(),
+        town_id=town.id,
+        shop_id=fleca.id,
+        total_amount=Decimal("15.00"),
+        note="[DEMO] Liquidació Fleca del Port",
+        is_fake=True,
+        created_at=now - timedelta(days=10),
+    )
+    db.add(fleca_payment)
+    await db.flush()
+    fleca_paid_a.payment_id = fleca_payment.id
+    fleca_paid_b.payment_id = fleca_payment.id
+
+    # ── Other pending use (admin Bescanvis) ─────────────────────────
+    await _redeem(
+        email="veci3.demo@km0lab.com",
+        reward_name="[DEMO] 20% de descompte",
+        status="pending_use",
+        requested_days_ago=0.5,
+        code="20001",
+    )
+
+    # ── Vouchers used, pending payment (other shops) ────────────────
+    await _redeem(
+        email="veci1.demo@km0lab.com",
+        reward_name="[DEMO] Bono 5 €",
+        status="used",
+        requested_days_ago=4,
+        history=used_history,
+        shop=forn,
+        amount="5€",
+        amount_applied="5€",
+        used_days_ago=2,
+        code="20002",
+    )
+    await _redeem(
+        email="veci2.demo@km0lab.com",
+        reward_name="[DEMO] Bono 10 €",
+        status="used",
+        requested_days_ago=7,
+        history=used_history,
+        shop=cafe,
+        amount="10€",
+        amount_applied="10€",
+        used_days_ago=5,
+        code="20003",
+    )
+    await _redeem(
+        email="veci3.demo@km0lab.com",
+        reward_name="[DEMO] Bono 20 €",
+        status="used",
+        requested_days_ago=9,
+        history=used_history,
+        shop=forn,
+        amount="20€",
+        amount_applied="20€",
+        used_days_ago=7,
+        code="20004",
+    )
+    await _redeem(
+        email="veci5.demo@km0lab.com",
+        reward_name="[DEMO] 10% de descompte",
+        status="used",
+        requested_days_ago=5,
+        history=used_history,
+        shop=llibreria,
+        amount_applied="3€",
+        used_days_ago=3,
+        code="20005",
+    )
+    await _redeem(
+        email=DEMO_RESIDENT_EMAIL,
+        reward_name="[DEMO] Bono 5 €",
+        status="used",
+        requested_days_ago=3,
+        history=used_history,
+        shop=cafe,
+        amount="5€",
+        amount_applied="5€",
+        used_days_ago=1,
+        code="20006",
+    )
+
+    # ── Café historic payment (~20 €) ───────────────────────────────
+    paid_a = await _redeem(
+        email="veci2.demo@km0lab.com",
+        reward_name="[DEMO] Bono 10 €",
+        status="used",
+        requested_days_ago=22,
+        history=used_history,
+        shop=cafe,
+        amount="10€",
+        amount_applied="10€",
+        used_days_ago=20,
+        code="20007",
+    )
+    paid_b = await _redeem(
+        email="veci3.demo@km0lab.com",
+        reward_name="[DEMO] Bono 10 €",
+        status="used",
+        requested_days_ago=21,
+        history=used_history,
+        shop=cafe,
+        amount="10€",
+        amount_applied="10€",
+        used_days_ago=19,
+        code="20008",
+    )
+    payment = ShopPayment(
+        id=_id(),
+        town_id=town.id,
+        shop_id=cafe.id,
+        total_amount=Decimal("20.00"),
+        note="[DEMO] Liquidació mensual de vals",
+        is_fake=True,
+        created_at=now - timedelta(days=15),
+    )
+    db.add(payment)
+    await db.flush()
+    paid_a.payment_id = payment.id
+    paid_b.payment_id = payment.id
+
+    # ── Deliveries in every stage ────────────────────────────────────
+    await _redeem(
+        email="veci1.demo@km0lab.com",
+        reward_name="[DEMO] Bossa tote KM0",
+        status="requested",
+        requested_days_ago=1,
+    )
+    await _redeem(
+        email="veci2.demo@km0lab.com",
+        reward_name="[DEMO] Samarreta KM0 LAB",
+        status="pending_preparation",
+        requested_days_ago=3,
+        history=("requested",),
+    )
+    await _redeem(
+        email="veci3.demo@km0lab.com",
+        reward_name="[DEMO] Visita guiada al far",
+        status="prepared",
+        requested_days_ago=5,
+        history=("requested", "pending_preparation"),
+    )
+    await _redeem(
+        email="veci5.demo@km0lab.com",
+        reward_name="[DEMO] Taller de cuina local",
+        status="pending_pickup",
+        requested_days_ago=8,
+        history=("requested", "pending_preparation", "prepared"),
+    )
+    await _redeem(
+        email="veci4.demo@km0lab.com",
+        reward_name="[DEMO] Bossa tote KM0",
+        status="delivered",
+        requested_days_ago=12,
+        history=("requested", "pending_preparation", "prepared", "pending_pickup"),
+        delivered_days_ago=10,
+    )
+    await _redeem(
+        email=DEMO_RESIDENT_EMAIL,
+        reward_name="[DEMO] Samarreta KM0 LAB",
+        status="delivered",
+        requested_days_ago=18,
+        history=("requested", "pending_preparation", "prepared", "pending_pickup"),
+        delivered_days_ago=16,
+    )
+
+    await db.flush()
+    return len(created), 2, fleca_pending_codes
 
 
 async def seed_demo() -> None:
@@ -980,6 +1374,7 @@ async def seed_demo() -> None:
             description="[DEMO] Welcome bonus",
         )
 
+        fake_residents: list[User] = []
         for email, name, pts in FAKE_RESIDENTS:
             first, last = split_full_name(name)
             u = User(
@@ -1004,6 +1399,15 @@ async def seed_demo() -> None:
                 town_id=town.id,
                 description="[DEMO] Fake resident balance",
             )
+            fake_residents.append(u)
+
+        redemption_count, payment_count, fleca_codes = await _seed_fake_redemptions(
+            db,
+            town=town,
+            participants=[*fake_residents, resident],
+            shops=shops,
+            fleca=merchant_shop,
+        )
 
         await db.commit()
         n_cats = len(DEFAULT_SHOP_CATEGORIES)
@@ -1012,6 +1416,14 @@ async def seed_demo() -> None:
         print(f"  {promo_count} fake promotions (2 per shop)")
         print(f"  {action_count} fake point actions (demo admin catalog)")
         print(f"  {reward_count} fake rewards (≥2 per type + bonos 5/10/20/50€)")
+        print(
+            f"  {redemption_count} fake redemptions (vals + lliuraments, "
+            f"tots els estats) + {payment_count} shop payments"
+        )
+        print(
+            f"  Fleca pending codes (Validar vals): "
+            f"{' / '.join(fleca_codes)}"
+        )
         print(f"  {DEMO_RESIDENT_EMAIL} / 123456  → resident")
         print(f"  {DEMO_MERCHANT_EMAIL} / 123456  → merchant+resident (Fleca del Port)")
         print(f"  {DEMO_ADMIN_EMAIL} / 123456     → admin+resident")
