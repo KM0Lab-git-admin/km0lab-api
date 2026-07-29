@@ -15,6 +15,9 @@ class ResidentActivityOut(BaseModel):
 
 class ResidentOut(BaseModel):
     id: str
+    slug: str
+    first_name: str | None
+    last_name: str | None
     name: str | None
     points: int
     town_id: str | None

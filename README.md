@@ -10,12 +10,14 @@ persiste el dominio de negocio (usuarios, puntos, comercios, QR, recompensas).
 
 | Área | Tablas |
 |------|--------|
-| Identidad | `users` (`resident` \| `merchant` \| `admin`), `otp_codes`, `towns` |
+| Identidad | `users` (email único; `postal_code` → `town_postal_codes` → `towns`; roles multi), `otp_codes`, `towns`, `town_postal_codes` |
 | Comercios | `shops`, `promotions` |
 | Catálogo | `point_actions`, `rewards`, `reward_shops` |
 | Ledger / QR / canjes | `points_transactions`, `qr_scans`, `redemptions`, `redemption_events` |
 
-Naming en **inglés**. Auth: OTP email + JWT (con `role`, `town_id`, `shop_id`).
+Naming en **inglés**. Auth: OTP email + JWT (`roles[]`, `town_id`, `shop_id`).
+Misma identidad (email) puede usar app y backoffice según roles.
+Header opcional `X-Active-Role` para fijar el contexto de la petición.
 
 ## Stack
 
@@ -72,7 +74,7 @@ alembic upgrade head
 alembic revision --autogenerate -m "..."
 ```
 
-Revisiones de dominio: `0003_towns_roles` … `0006_ledger_scans_redemptions`.
+Revisiones de dominio: `0003_towns_roles` … `0010_is_fake`.
 
 ## Seed
 
@@ -82,6 +84,23 @@ python -m scripts.seed
 ```
 
 Crea Malgrat / Blanes / Lloret con admin, shop piloto y catálogo de ejemplo.
+
+## Demo (development / staging)
+
+Cuentas fijas (código **123456**, sin email OTP). Solo ven filas `is_fake=true`:
+
+| Email | Roles |
+|-------|--------|
+| `resident@km0lab.com` | resident |
+| `merchant@km0lab.com` | resident + merchant |
+| `admin@km0lab.com` | resident + admin |
+
+```bash
+python -m scripts.seed          # towns reales (Malgrat…)
+python -m scripts.seed_demo     # usuarios + catálogo fake Malgrat
+```
+
+Desactivado automáticamente si `ENVIRONMENT=production`.
 
 ## Tests
 

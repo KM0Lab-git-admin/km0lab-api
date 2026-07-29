@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -15,16 +15,21 @@ class VerifyOtpIn(BaseModel):
 class UserOut(BaseModel):
     id: str
     email: EmailStr
-    name: str | None
+    slug: str
+    first_name: str | None
+    last_name: str | None
+    name: str | None = None  # computed display: first + last
     lang: str
     postal_code: str | None
-    town: str | None
-    points: int
-    role: str
     town_id: str | None = None
+    town_name: str | None = None
+    points: int
+    roles: list[str]
     shop_id: str | None = None
     phone: str | None = None
+    birth_date: date | None = None
     contact_shared: bool = False
+    is_fake: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -34,6 +39,8 @@ class AuthOut(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserOut
+    points_awarded: int | None = None
+    points_award_message: str | None = None
 
 
 class MessageOut(BaseModel):

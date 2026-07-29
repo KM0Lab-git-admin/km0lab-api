@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.deps import require_admin, require_merchant
-from app.models import PointAction, Promotion, QrScan, Redemption, User
+from app.models import PointAction, Promotion, QrScan, Redemption, TownPostalCode, User
 from app.schemas import AdminStatsOut, MerchantStatsOut
 
 router = APIRouter(prefix="/stats", tags=["stats"])
@@ -27,14 +27,24 @@ async def admin_stats(
         await db.execute(
             select(func.count())
             .select_from(User)
-            .where(User.role == "resident", User.town_id == town_id)
+            .join(TownPostalCode, User.postal_code == TownPostalCode.postal_code)
+            .where(
+                User.is_resident.is_(True),
+                TownPostalCode.town_id == town_id,
+                User.is_fake.is_(user.is_fake),
+            )
         )
     ).scalar_one()
 
     points_in_circulation = (
         await db.execute(
-            select(func.coalesce(func.sum(User.points), 0)).where(
-                User.role == "resident", User.town_id == town_id
+            select(func.coalesce(func.sum(User.points), 0))
+            .select_from(User)
+            .join(TownPostalCode, User.postal_code == TownPostalCode.postal_code)
+            .where(
+                User.is_resident.is_(True),
+                TownPostalCode.town_id == town_id,
+                User.is_fake.is_(user.is_fake),
             )
         )
     ).scalar_one()
@@ -49,6 +59,7 @@ async def admin_stats(
             .where(
                 Redemption.town_id == town_id,
                 Redemption.requested_at >= month_start,
+                Redemption.is_fake.is_(user.is_fake),
             )
         )
     ).scalar_one()
@@ -57,7 +68,11 @@ async def admin_stats(
         await db.execute(
             select(func.count())
             .select_from(PointAction)
-            .where(PointAction.town_id == town_id, PointAction.active.is_(True))
+            .where(
+                PointAction.town_id == town_id,
+                PointAction.active.is_(True),
+                PointAction.is_fake.is_(user.is_fake),
+            )
         )
     ).scalar_one()
 
@@ -65,7 +80,10 @@ async def admin_stats(
         await db.execute(
             select(func.count())
             .select_from(PointAction)
-            .where(PointAction.town_id == town_id)
+            .where(
+                PointAction.town_id == town_id,
+                PointAction.is_fake.is_(user.is_fake),
+            )
         )
     ).scalar_one()
 
@@ -89,14 +107,16 @@ async def merchant_stats(
 
     total_scans = (
         await db.execute(
-            select(func.count()).select_from(QrScan).where(QrScan.shop_id == shop_id)
+            select(func.count())
+            .select_from(QrScan)
+            .where(QrScan.shop_id == shop_id, QrScan.is_fake.is_(user.is_fake))
         )
     ).scalar_one()
 
     unique_visitors = (
         await db.execute(
             select(func.count(func.distinct(QrScan.user_id))).where(
-                QrScan.shop_id == shop_id
+                QrScan.shop_id == shop_id, QrScan.is_fake.is_(user.is_fake)
             )
         )
     ).scalar_one()
@@ -104,7 +124,7 @@ async def merchant_stats(
     points_awarded = (
         await db.execute(
             select(func.coalesce(func.sum(QrScan.points), 0)).where(
-                QrScan.shop_id == shop_id
+                QrScan.shop_id == shop_id, QrScan.is_fake.is_(user.is_fake)
             )
         )
     ).scalar_one()
@@ -113,7 +133,11 @@ async def merchant_stats(
         await db.execute(
             select(func.count())
             .select_from(Promotion)
-            .where(Promotion.shop_id == shop_id, Promotion.active.is_(True))
+            .where(
+                Promotion.shop_id == shop_id,
+                Promotion.active.is_(True),
+                Promotion.is_fake.is_(user.is_fake),
+            )
         )
     ).scalar_one()
 

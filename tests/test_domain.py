@@ -1,17 +1,19 @@
-"""Domain tests: roles/scope, ledger, QR anti-fraud, redemptions."""
+"""Domain tests: multi-role, postal→town, ledger, QR, redemptions."""
 
 import pytest
-from sqlalchemy import select
 
-from app.models import PointsTransaction, Town, User
+from app.models import Reward, Shop, Town, TownPostalCode, User
+from app.roles import IncompatibleRolesError, flags_from_roles, normalize_roles
 from app.security import create_access_token
+from app.utils.slug import slugify
 
 pytestmark = pytest.mark.asyncio
 
 
-async def _create_town(db_session, name="Malgrat de Mar"):
+async def _create_town(db_session, name="Malgrat de Mar", postal_code="08380"):
     town = Town(
         name=name,
+        slug=slugify(name),
         entity_name=f"Ajuntament de {name}",
         entity_type="city_council",
         contact_email=f"admin@{name.lower().replace(' ', '')}.cat",
@@ -19,7 +21,20 @@ async def _create_town(db_session, name="Malgrat de Mar"):
     )
     db_session.add(town)
     await db_session.flush()
-    return town
+    db_session.add(
+        TownPostalCode(
+            postal_code=postal_code,
+            town_id=town.id,
+            is_primary=True,
+        )
+    )
+    await db_session.flush()
+    return town, postal_code
+
+
+async def test_admin_and_merchant_incompatible():
+    with pytest.raises(IncompatibleRolesError):
+        normalize_roles(["admin", "merchant"])
 
 
 async def test_welcome_creates_ledger_entry(client, capture_otp):
@@ -31,54 +46,123 @@ async def test_welcome_creates_ledger_entry(client, capture_otp):
     )
     assert r.status_code == 200
     assert r.json()["user"]["points"] == 100
-    assert r.json()["user"]["role"] == "resident"
+    assert r.json()["user"]["roles"] == ["resident"]
 
 
 async def test_admin_town_scope(client, db_session):
-    town_a = await _create_town(db_session, "TownA")
-    town_b = await _create_town(db_session, "TownB")
+    town_a, cp_a = await _create_town(db_session, "TownA", "08001")
+    town_b, _ = await _create_town(db_session, "TownB", "08002")
     admin = User(
         email="admin-a@test.cat",
-        role="admin",
-        town_id=town_a.id,
-        name="Admin A",
+        slug="admin-a",
+        postal_code=cp_a,
+        first_name="Admin",
+        last_name="A",
         points=0,
+        **flags_from_roles(["admin", "resident"]),
     )
     db_session.add(admin)
     await db_session.commit()
 
     token = create_access_token(
-        admin.id, role="admin", town_id=town_a.id
+        admin.id, roles=["admin", "resident"], town_id=town_a.id
     )
     headers = {"Authorization": f"Bearer {token}"}
 
     r = await client.get(f"/api/v1/towns/{town_a.id}", headers=headers)
     assert r.status_code == 200
     assert r.json()["name"] == "TownA"
+    assert any(p["postal_code"] == cp_a for p in r.json()["postal_codes"])
 
     r = await client.get(f"/api/v1/towns/{town_b.id}", headers=headers)
     assert r.status_code == 403
 
 
+async def test_postal_code_sets_town_name(client, db_session, capture_otp):
+    town, cp = await _create_town(db_session, "Malgrat de Mar", "08380")
+    await db_session.commit()
+
+    await client.post("/api/v1/auth/request-otp", json={"email": "cp@test.cat"})
+    code = capture_otp()
+    r = await client.post(
+        "/api/v1/auth/verify-otp", json={"email": "cp@test.cat", "code": code}
+    )
+    token = r.json()["access_token"]
+    r = await client.patch(
+        "/api/v1/users/me",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"postal_code": cp},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["postal_code"] == cp
+    assert body["town_id"] == town.id
+    assert body["town_name"] == "Malgrat de Mar"
+
+
+async def test_admin_can_use_resident_endpoints(client, db_session, capture_otp):
+    town, cp = await _create_town(db_session, postal_code="08381")
+    shop = Shop(
+        town_id=town.id,
+        name="Botiga",
+        categories=[],
+        contact_email="b@test.cat",
+        visit_points=10,
+        status="active",
+        qr_code="ADMINSCAN",
+    )
+    admin = User(
+        email="admin-app@test.cat",
+        slug="admin-app",
+        postal_code=cp,
+        points=0,
+        **flags_from_roles(["admin", "resident"]),
+    )
+    db_session.add_all([shop, admin])
+    await db_session.commit()
+
+    await client.post(
+        "/api/v1/auth/request-otp", json={"email": "admin-app@test.cat"}
+    )
+    code = capture_otp()
+    r = await client.post(
+        "/api/v1/auth/verify-otp",
+        json={"email": "admin-app@test.cat", "code": code},
+    )
+    assert r.status_code == 200
+    assert set(r.json()["user"]["roles"]) == {"admin", "resident"}
+    token = r.json()["access_token"]
+
+    r = await client.post(
+        "/api/v1/scans",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"qr_code": "ADMINSCAN"},
+    )
+    assert r.status_code == 201, r.text
+
+
 async def test_shop_create_and_merchant_link(client, db_session, capture_otp):
-    town = await _create_town(db_session)
+    town, cp = await _create_town(db_session, postal_code="08382")
     admin = User(
         email="admin-shop@test.cat",
-        role="admin",
-        town_id=town.id,
+        slug="admin-shop",
+        postal_code=cp,
         points=0,
+        **flags_from_roles(["admin", "resident"]),
     )
     db_session.add(admin)
     await db_session.commit()
 
-    admin_token = create_access_token(admin.id, role="admin", town_id=town.id)
+    admin_token = create_access_token(
+        admin.id, roles=["admin", "resident"], town_id=town.id
+    )
     r = await client.post(
         "/api/v1/shops",
         headers={"Authorization": f"Bearer {admin_token}"},
         json={
             "name": "Fleca Nova",
             "contact_email": "fleca@test.cat",
-            "categories": ["Fleca"],
+            "categories": ["bakery"],
             "visit_points": 15,
         },
     )
@@ -93,17 +177,70 @@ async def test_shop_create_and_merchant_link(client, db_session, capture_otp):
         json={"email": "fleca@test.cat", "code": code},
     )
     assert r.status_code == 200
-    assert r.json()["user"]["role"] == "merchant"
+    assert set(r.json()["user"]["roles"]) == {"resident", "merchant"}
     assert r.json()["user"]["shop_id"] == shop["id"]
-    assert r.json()["user"]["points"] == 0  # no welcome for merchants
+    assert r.json()["user"]["town_id"] == town.id
+    assert r.json()["user"]["postal_code"] == cp
+    assert r.json()["user"]["points"] == 100
 
 
-async def test_qr_scan_awards_points_once_per_day(
+async def test_existing_resident_becomes_merchant(
     client, db_session, capture_otp
 ):
-    town = await _create_town(db_session)
-    from app.models import Shop
+    town, cp = await _create_town(db_session, postal_code="08383")
+    email = "dual@test.cat"
 
+    await client.post("/api/v1/auth/request-otp", json={"email": email})
+    code = capture_otp()
+    r = await client.post(
+        "/api/v1/auth/verify-otp", json={"email": email, "code": code}
+    )
+    assert r.json()["user"]["roles"] == ["resident"]
+    assert r.json()["user"]["points"] == 100
+
+    admin = User(
+        email="admin-dual@test.cat",
+        slug="admin-dual",
+        postal_code=cp,
+        points=0,
+        **flags_from_roles(["admin", "resident"]),
+    )
+    db_session.add(admin)
+    await db_session.commit()
+    admin_token = create_access_token(
+        admin.id, roles=["admin", "resident"], town_id=town.id
+    )
+    r = await client.post(
+        "/api/v1/shops",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={
+            "name": "Dual Shop",
+            "contact_email": email,
+            "categories": ["cafe"],
+            "visit_points": 10,
+        },
+    )
+    assert r.status_code == 201
+    shop_id = r.json()["id"]
+
+    await client.post("/api/v1/auth/request-otp", json={"email": email})
+    code = capture_otp()
+    r = await client.post(
+        "/api/v1/auth/verify-otp", json={"email": email, "code": code}
+    )
+    assert r.status_code == 200
+    body = r.json()["user"]
+    assert set(body["roles"]) == {"resident", "merchant"}
+    assert body["shop_id"] == shop_id
+    assert body["points"] == 100
+
+
+async def test_qr_scan_awards_points_with_cooldown(
+    client, db_session, capture_otp
+):
+    from app.models import PointAction
+
+    town, _ = await _create_town(db_session, postal_code="08384")
     shop = Shop(
         town_id=town.id,
         name="Botiga",
@@ -114,6 +251,18 @@ async def test_qr_scan_awards_points_once_per_day(
         qr_code="TESTQRCODE",
     )
     db_session.add(shop)
+    db_session.add(
+        PointAction(
+            town_id=town.id,
+            type="qr_scan",
+            name="Visita comerç",
+            description="Punts per escaneig",
+            points=100,
+            cooldown_days=90,
+            active=True,
+            is_fake=False,
+        )
+    )
     await db_session.commit()
 
     await client.post("/api/v1/auth/request-otp", json={"email": "scan@test.cat"})
@@ -129,21 +278,27 @@ async def test_qr_scan_awards_points_once_per_day(
         "/api/v1/scans", headers=headers, json={"qr_code": "TESTQRCODE"}
     )
     assert r.status_code == 201, r.text
-    assert r.json()["points"] == 20
-    assert r.json()["balance"] == balance_before + 20
+    body = r.json()
+    assert body["points"] == 100
+    assert body["shop_name"] == "Botiga"
+    assert body["balance"] == balance_before + 100
+    assert body["available_at"]
 
     r = await client.post(
         "/api/v1/scans", headers=headers, json={"qr_code": "TESTQRCODE"}
     )
     assert r.status_code == 409
+    detail = r.json()["detail"]
+    assert detail["code"] == "qr_cooldown"
+    assert detail["shop_name"] == "Botiga"
+    assert detail["available_at"]
+    assert detail["cooldown_days"] == 90
 
 
 async def test_redemption_debits_ledger_and_stock(
     client, db_session, capture_otp
 ):
-    town = await _create_town(db_session)
-    from app.models import Reward
-
+    town, cp = await _create_town(db_session, postal_code="08385")
     reward = Reward(
         town_id=town.id,
         name="Descompte",
@@ -163,11 +318,10 @@ async def test_redemption_debits_ledger_and_stock(
         json={"email": "redeemer@test.cat", "code": code},
     )
     token = r.json()["access_token"]
-    # Link to town
     await client.patch(
         "/api/v1/users/me",
         headers={"Authorization": f"Bearer {token}"},
-        json={"town_id": town.id},
+        json={"postal_code": cp},
     )
 
     r = await client.post(
@@ -184,7 +338,104 @@ async def test_redemption_debits_ledger_and_stock(
     me = await client.get(
         "/api/v1/users/me", headers={"Authorization": f"Bearer {token}"}
     )
-    assert me.json()["points"] == 50  # 100 welcome - 50
+    assert me.json()["points"] == 50
 
     await db_session.refresh(reward)
     assert reward.stock == 1
+
+
+async def test_points_history_balance_and_filters(
+    client, db_session, capture_otp
+):
+    from app.models import PointAction
+
+    town, _ = await _create_town(db_session, postal_code="08386")
+    shop = Shop(
+        town_id=town.id,
+        name="Forn Test",
+        categories=[],
+        contact_email="forn@test.cat",
+        visit_points=20,
+        status="active",
+        qr_code="HISTQR",
+    )
+    db_session.add(shop)
+    db_session.add(
+        PointAction(
+            town_id=town.id,
+            type="qr_scan",
+            name="Escaneig d'un comerç",
+            description="Visita",
+            points=20,
+            cooldown_days=1,
+            active=True,
+            is_fake=False,
+        )
+    )
+    reward = Reward(
+        town_id=town.id,
+        name="Val 5€",
+        description="Cafè",
+        type="discount",
+        points_required=50,
+        stock=5,
+        status="active",
+    )
+    db_session.add(reward)
+    await db_session.commit()
+
+    await client.post("/api/v1/auth/request-otp", json={"email": "hist@test.cat"})
+    code = capture_otp()
+    r = await client.post(
+        "/api/v1/auth/verify-otp", json={"email": "hist@test.cat", "code": code}
+    )
+    token = r.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    r = await client.post(
+        "/api/v1/scans", headers=headers, json={"qr_code": "HISTQR"}
+    )
+    assert r.status_code == 201, r.text
+
+    r = await client.post(
+        "/api/v1/redemptions",
+        headers=headers,
+        json={"reward_id": reward.id},
+    )
+    assert r.status_code == 201, r.text
+
+    r = await client.get("/api/v1/points/me/history", headers=headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # welcome 100 + scan 20 - redemption 50 = 70
+    assert body["balance"] == 70
+    assert body["earned_total"] == 120
+    assert body["spent_total"] == 50
+    assert len(body["items"]) >= 3
+    types = {i["type"] for i in body["items"]}
+    assert "welcome" in types
+    assert "scan" in types
+    assert "redemption" in types
+    scan_item = next(i for i in body["items"] if i["type"] == "scan")
+    assert scan_item["shop_name"] == "Forn Test"
+    assert scan_item["points"] == 20
+    red_item = next(i for i in body["items"] if i["type"] == "redemption")
+    assert red_item["reward_name"] == "Val 5€"
+    assert red_item["points"] == -50
+
+    r = await client.get(
+        "/api/v1/points/me/history",
+        headers=headers,
+        params={"filter": "earned"},
+    )
+    assert r.status_code == 200
+    assert all(i["points"] > 0 for i in r.json()["items"])
+    assert r.json()["balance"] == 70  # totals/balance always global
+
+    r = await client.get(
+        "/api/v1/points/me/history",
+        headers=headers,
+        params={"filter": "spent"},
+    )
+    assert r.status_code == 200
+    assert all(i["points"] < 0 for i in r.json()["items"])

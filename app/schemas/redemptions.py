@@ -25,6 +25,7 @@ class RedemptionOut(BaseModel):
     amount_applied: str | None
     delivered_at: datetime | None
     requested_at: datetime
+    is_fake: bool = False
     events: list[RedemptionEventOut] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}

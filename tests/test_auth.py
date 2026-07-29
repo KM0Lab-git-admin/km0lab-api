@@ -44,13 +44,15 @@ async def test_full_login_flow_creates_user_with_welcome_points(
     r = await client.patch(
         "/api/v1/users/me",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Marc", "town": "Malgrat de Mar", "lang": "es"},
+        json={"first_name": "Marc", "last_name": "Puig", "lang": "es"},
     )
     assert r.status_code == 200
     body = r.json()
-    assert body["name"] == "Marc"
-    assert body["town"] == "Malgrat de Mar"
+    assert body["first_name"] == "Marc"
+    assert body["last_name"] == "Puig"
+    assert body["name"] == "Marc Puig"
     assert body["lang"] == "es"
+    assert body["slug"]
 
 
 async def test_second_login_reuses_user(client, capture_otp):

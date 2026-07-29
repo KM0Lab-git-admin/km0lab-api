@@ -26,7 +26,10 @@ async def list_promotions(
     rows = (
         await db.execute(
             select(Promotion)
-            .where(Promotion.shop_id == user.shop_id)
+            .where(
+                Promotion.shop_id == user.shop_id,
+                Promotion.is_fake.is_(user.is_fake),
+            )
             .order_by(Promotion.created_at.desc())
         )
     ).scalars().all()
@@ -53,6 +56,7 @@ async def create_promotion(
         valid_until=payload.valid_until,
         conditions=payload.conditions,
         active=payload.active,
+        is_fake=user.is_fake,
     )
     db.add(promo)
     await db.commit()
@@ -70,7 +74,14 @@ async def update_promotion(
     promo = await db.get(Promotion, promo_id)
     if not promo or promo.shop_id != user.shop_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Promotion not found")
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    # DB column `label` is NOT NULL — never persist null.
+    if "label" in data and not data["label"]:
+        data["label"] = _label_for(
+            data.get("type") or promo.type,
+            data.get("title") or promo.title,
+        )
+    for field, value in data.items():
         setattr(promo, field, value)
     await db.commit()
     await db.refresh(promo)

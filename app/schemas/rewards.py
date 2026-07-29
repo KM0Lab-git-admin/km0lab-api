@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.catalog.rewards import REWARD_TYPE_PATTERN
+
 
 class RewardOut(BaseModel):
     id: str
@@ -9,6 +11,7 @@ class RewardOut(BaseModel):
     name: str
     description: str
     image_url: str | None
+    has_image: bool = False
     type: str
     points_required: int
     value: str | None
@@ -18,6 +21,7 @@ class RewardOut(BaseModel):
     conditions: str | None
     status: str
     shop_ids: list[str] = Field(default_factory=list)  # empty = all shops
+    is_fake: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -27,10 +31,8 @@ class RewardOut(BaseModel):
 class RewardCreate(BaseModel):
     name: str = Field(max_length=200)
     description: str = ""
-    image_url: str | None = None
-    type: str = Field(
-        pattern="^(discount|balance|product|service|merchandise|experience)$"
-    )
+    image_url: str | None = None  # ignored; use PUT /rewards/{id}/media
+    type: str = Field(pattern=REWARD_TYPE_PATTERN)
     points_required: int = Field(ge=0)
     value: str | None = None
     stock: int | None = Field(default=None, ge=0)
@@ -44,11 +46,8 @@ class RewardCreate(BaseModel):
 class RewardUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
-    image_url: str | None = None
-    type: str | None = Field(
-        default=None,
-        pattern="^(discount|balance|product|service|merchandise|experience)$",
-    )
+    image_url: str | None = None  # ignored; use PUT/DELETE /rewards/{id}/media
+    type: str | None = Field(default=None, pattern=REWARD_TYPE_PATTERN)
     points_required: int | None = Field(default=None, ge=0)
     value: str | None = None
     stock: int | None = None
@@ -59,3 +58,10 @@ class RewardUpdate(BaseModel):
         default=None, pattern="^(active|inactive|sold_out)$"
     )
     shop_ids: list[str] | None = None
+
+
+class RewardMediaOut(BaseModel):
+    reward_id: str
+    content_type: str
+    byte_size: int
+    url: str

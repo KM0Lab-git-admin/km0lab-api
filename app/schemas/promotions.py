@@ -16,6 +16,7 @@ class PromotionOut(BaseModel):
     valid_until: datetime | None
     conditions: str | None
     active: bool
+    is_fake: bool = False
     created_at: datetime
     updated_at: datetime
 

@@ -3,10 +3,12 @@
 import hashlib
 import hmac
 from datetime import datetime, timedelta, timezone
+from typing import Iterable
 
 from jose import JWTError, jwt
 
 from app.config import get_settings
+from app.roles import normalize_roles, primary_role
 
 settings = get_settings()
 
@@ -14,14 +16,25 @@ settings = get_settings()
 def create_access_token(
     user_id: str,
     *,
-    role: str = "resident",
+    roles: Iterable[str] | None = None,
+    role: str | None = None,
     town_id: str | None = None,
     shop_id: str | None = None,
 ) -> str:
+    """Issue JWT. Prefer `roles`; legacy single `role=` still accepted."""
+    if roles is not None:
+        role_list = normalize_roles(roles)
+    elif role is not None:
+        role_list = normalize_roles([role])
+    else:
+        role_list = normalize_roles(["resident"])
+
     now = datetime.now(timezone.utc)
     payload = {
         "sub": user_id,
-        "role": role,
+        "roles": role_list,
+        # Legacy single-role claim for older clients.
+        "role": primary_role(role_list),
         "town_id": town_id,
         "shop_id": shop_id,
         "iat": now,

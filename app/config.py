@@ -8,8 +8,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # Entorno
-    environment: str = "development"  # development | production
+    # Entorno: development | staging | production
+    # Demo login (resident@/merchant@/admin@km0lab.com + 123456) activo
+    # salvo en production.
+    environment: str = "development"
 
     # Base de datos MySQL
     db_host: str = "localhost"
@@ -37,8 +39,16 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from: str = "KM0 LAB <no-reply@email.km0lab.com>"
 
-    # CORS: orígenes permitidos, separados por coma
-    cors_origins: str = "http://localhost:5173,http://localhost:3000"
+    # CORS: orígenes del frontend, separados por coma
+    cors_origins: str = (
+        "http://localhost:5173,http://localhost:5174,http://localhost:3000,"
+        "http://localhost:8080,"
+        "http://127.0.0.1:5173,http://127.0.0.1:5174,http://127.0.0.1:3000,"
+        "http://127.0.0.1:8080"
+    )
+
+    # Deep-link encoded in shop QR PNGs (app extracts ?c=token)
+    qr_scan_base_url: str = "https://app.km0lab.com/scan"
 
     @property
     def database_url(self) -> str:

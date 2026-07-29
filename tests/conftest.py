@@ -10,6 +10,8 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base, get_db
 from app.main import app
+from app.models import ShopCategory
+from app.catalog.shop_categories import DEFAULT_SHOP_CATEGORIES
 from app.ratelimit import limiter
 
 
@@ -22,6 +24,13 @@ async def engine():
     )
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    session_maker = async_sessionmaker(eng, expire_on_commit=False)
+    async with session_maker() as session:
+        for slug, order in DEFAULT_SHOP_CATEGORIES:
+            session.add(ShopCategory(slug=slug, sort_order=order, active=True))
+        await session.commit()
+
     yield eng
     await eng.dispose()
 

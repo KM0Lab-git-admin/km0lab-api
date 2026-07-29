@@ -15,11 +15,13 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.mysql import LONGBLOB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
@@ -38,6 +40,7 @@ class Town(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(120))
+    slug: Mapped[str] = mapped_column(String(80), unique=True, index=True)
     entity_name: Mapped[str] = mapped_column(String(160), default="")
     entity_type: Mapped[str] = mapped_column(
         String(20), default="city_council"
@@ -45,10 +48,7 @@ class Town(Base):
     contact_email: Mapped[str] = mapped_column(String(255), default="")
     manager_name: Mapped[str] = mapped_column(String(120), default="")
     logo_url: Mapped[str | None] = mapped_column(String(512), default=None)
-    points_per_euro: Mapped[int] = mapped_column(Integer, default=200)
     expiry_months: Mapped[int | None] = mapped_column(Integer, default=None)
-    default_visit_points: Mapped[int] = mapped_column(Integer, default=10)
-    default_lang: Mapped[str] = mapped_column(String(5), default="ca")  # ca|es|en
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
@@ -56,37 +56,110 @@ class Town(Base):
         DateTime, server_default=func.now(), onupdate=func.now()
     )
 
+    postal_codes: Mapped[list[TownPostalCode]] = relationship(
+        "TownPostalCode", back_populates="town", cascade="all, delete-orphan"
+    )
+
+
+class TownPostalCode(Base):
+    """Postal codes belonging to a town (N per town; each CP is unique)."""
+
+    __tablename__ = "town_postal_codes"
+
+    postal_code: Mapped[str] = mapped_column(String(10), primary_key=True)
+    town_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("towns.id", ondelete="CASCADE"), index=True
+    )
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+    town: Mapped[Town] = relationship("Town", back_populates="postal_codes")
+
 
 class User(Base):
+    """Identity keyed by email. Town membership via postal_code → town_postal_codes.
+
+    Multi-role: resident±merchant or resident±admin (never admin+merchant).
+    """
+
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
-    name: Mapped[str | None] = mapped_column(String(120), default=None)
+    slug: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    first_name: Mapped[str | None] = mapped_column(String(80), default=None)
+    last_name: Mapped[str | None] = mapped_column(String(120), default=None)
     lang: Mapped[str] = mapped_column(String(5), default="ca")  # ca | es | en
-    postal_code: Mapped[str | None] = mapped_column(String(10), default=None)
-    # Free-text town label from app onboarding (kept for backward compat).
-    town: Mapped[str | None] = mapped_column(String(120), default=None)
+    # FK to town_postal_codes — source of town membership / name.
+    postal_code: Mapped[str | None] = mapped_column(
+        String(10),
+        ForeignKey("town_postal_codes.postal_code"),
+        default=None,
+        index=True,
+    )
     # Cached balance; source of truth is points_transactions.
     points: Mapped[int] = mapped_column(Integer, default=0)
-    # Domain role + scope
-    role: Mapped[str] = mapped_column(
-        String(20), default="resident", index=True
-    )  # resident | merchant | admin
-    town_id: Mapped[str | None] = mapped_column(
-        String(32), ForeignKey("towns.id"), default=None, index=True
-    )
+    # Multi-role flags (admin XOR merchant enforced in app.roles).
+    is_resident: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    is_merchant: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     shop_id: Mapped[str | None] = mapped_column(
         String(32), ForeignKey("shops.id"), default=None, index=True
     )
     phone: Mapped[str | None] = mapped_column(String(40), default=None)
+    birth_date: Mapped[date | None] = mapped_column(Date, default=None)
     contact_shared: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_fake: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
     )
+
+    postal_ref: Mapped[TownPostalCode | None] = relationship(
+        "TownPostalCode", lazy="selectin"
+    )
+
+    @property
+    def name(self) -> str | None:
+        """Display name: first_name + last_name."""
+        parts = [p for p in (self.first_name, self.last_name) if p]
+        return " ".join(parts) or None
+
+    @property
+    def town_id(self) -> str | None:
+        return self.postal_ref.town_id if self.postal_ref else None
+
+    @property
+    def town_name(self) -> str | None:
+        if self.postal_ref is None:
+            return None
+        town = self.postal_ref.town
+        return town.name if town is not None else None
+
+    @property
+    def roles(self) -> list[str]:
+        from app.roles import roles_from_flags
+
+        return roles_from_flags(
+            is_resident=self.is_resident,
+            is_merchant=self.is_merchant,
+            is_admin=self.is_admin,
+        )
+
+    def has_role(self, role: str) -> bool:
+        return role in self.roles
+
+    def set_roles(self, roles: list[str]) -> None:
+        from app.roles import flags_from_roles
+
+        flags = flags_from_roles(roles)
+        self.is_resident = flags["is_resident"]
+        self.is_merchant = flags["is_merchant"]
+        self.is_admin = flags["is_admin"]
 
 
 class OtpCode(Base):
@@ -108,6 +181,20 @@ class OtpCode(Base):
 # ── Shops & promotions ────────────────────────────────────────────────
 
 
+class ShopCategory(Base):
+    """Catalog of shop categories. Labels live in front/backoffice i18n
+    keyed by slug (e.g. shopCategories.bakery)."""
+
+    __tablename__ = "shop_categories"
+
+    slug: Mapped[str] = mapped_column(String(40), primary_key=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+
 class Shop(Base):
     __tablename__ = "shops"
 
@@ -117,8 +204,10 @@ class Shop(Base):
     )
     name: Mapped[str] = mapped_column(String(160))
     emoji: Mapped[str | None] = mapped_column(String(16), default=None)
+    # Legacy URL fields; prefer shop_media BLOBs. Kept for migration compat.
     logo_url: Mapped[str | None] = mapped_column(String(512), default=None)
     hero_url: Mapped[str | None] = mapped_column(String(512), default=None)
+    # List of shop_categories.slug (not translated labels).
     categories: Mapped[list] = mapped_column(JSON, default=list)
     contact_email: Mapped[str] = mapped_column(String(255), default="")
     visit_points: Mapped[int] = mapped_column(Integer, default=10)
@@ -127,6 +216,8 @@ class Shop(Base):
     phone: Mapped[str | None] = mapped_column(String(40), default=None)
     website: Mapped[str | None] = mapped_column(String(255), default=None)
     description: Mapped[str | None] = mapped_column(Text, default=None)
+    # Weekly schedule JSON — see app.schemas.opening_hours.OpeningHours
+    # {"monday": {"closed": false, "opens": "07:00", "closes": "20:00"}, ...}
     opening_hours: Mapped[dict | None] = mapped_column(JSON, default=None)
     status: Mapped[str] = mapped_column(
         String(20), default="pending", index=True
@@ -134,12 +225,46 @@ class Shop(Base):
     qr_code: Mapped[str | None] = mapped_column(
         String(64), unique=True, default=None, index=True
     )
+    is_fake: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
     )
+
+    media: Mapped[list["ShopMedia"]] = relationship(
+        "ShopMedia", back_populates="shop", cascade="all, delete-orphan"
+    )
+
+
+class ShopMedia(Base):
+    """Binary logo/hero assets for a shop (stored in MySQL LONGBLOB)."""
+
+    __tablename__ = "shop_media"
+    __table_args__ = (
+        UniqueConstraint("shop_id", "kind", name="uq_shop_media_kind"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    shop_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("shops.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(16))  # logo | hero
+    content_type: Mapped[str] = mapped_column(String(64))
+    data: Mapped[bytes] = mapped_column(
+        LargeBinary().with_variant(LONGBLOB(), "mysql"),
+        nullable=False,
+    )
+    byte_size: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    shop: Mapped["Shop"] = relationship("Shop", back_populates="media")
 
 
 class Promotion(Base):
@@ -161,6 +286,7 @@ class Promotion(Base):
     valid_until: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     conditions: Mapped[str | None] = mapped_column(Text, default=None)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_fake: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
@@ -181,7 +307,7 @@ class PointAction(Base):
     )
     type: Mapped[str] = mapped_column(
         String(30)
-    )  # signup | qr_scan | web_visit | web_signup | event | custom
+    )  # signup | birthday | qr_scan | web_visit | web_signup | event | custom
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str] = mapped_column(Text, default="")
     points: Mapped[int] = mapped_column(Integer, default=0)
@@ -193,9 +319,9 @@ class PointAction(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     url: Mapped[str | None] = mapped_column(String(512), default=None)
     event_id: Mapped[str | None] = mapped_column(String(64), default=None)
-    shop_id: Mapped[str | None] = mapped_column(
-        String(32), ForeignKey("shops.id"), default=None
-    )
+    # Days until the same user can earn points again from the same shop QR.
+    cooldown_days: Mapped[int | None] = mapped_column(Integer, default=None)
+    is_fake: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
@@ -216,7 +342,7 @@ class Reward(Base):
     image_url: Mapped[str | None] = mapped_column(String(512), default=None)
     type: Mapped[str] = mapped_column(
         String(30)
-    )  # discount | balance | product | service | merchandise | experience
+    )  # RewardType: discount | balance | product | service | merchandise | experience
     points_required: Mapped[int] = mapped_column(Integer)
     value: Mapped[str | None] = mapped_column(String(80), default=None)
     stock: Mapped[int | None] = mapped_column(Integer, default=None)  # None = unlimited
@@ -226,6 +352,7 @@ class Reward(Base):
     status: Mapped[str] = mapped_column(
         String(20), default="active", index=True
     )  # active | inactive | sold_out
+    is_fake: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
@@ -236,6 +363,41 @@ class Reward(Base):
     shops: Mapped[list[RewardShop]] = relationship(
         "RewardShop", cascade="all, delete-orphan", lazy="selectin"
     )
+    media: Mapped[RewardMedia | None] = relationship(
+        "RewardMedia",
+        back_populates="reward",
+        cascade="all, delete-orphan",
+        uselist=False,
+        lazy="selectin",
+    )
+
+
+class RewardMedia(Base):
+    """Binary catalog image for a reward (MySQL LONGBLOB)."""
+
+    __tablename__ = "reward_media"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    reward_id: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("rewards.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+    )
+    content_type: Mapped[str] = mapped_column(String(64))
+    data: Mapped[bytes] = mapped_column(
+        LargeBinary().with_variant(LONGBLOB(), "mysql"),
+        nullable=False,
+    )
+    byte_size: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    reward: Mapped["Reward"] = relationship("Reward", back_populates="media")
 
 
 class RewardShop(Base):
@@ -270,22 +432,20 @@ class PointsTransaction(Base):
     )
     type: Mapped[str] = mapped_column(
         String(30)
-    )  # welcome | action | scan | redemption | adjustment
+    )  # welcome | birthday | action | scan | redemption | adjustment
     points: Mapped[int] = mapped_column(Integer)  # +/-
     ref_id: Mapped[str | None] = mapped_column(String(32), default=None, index=True)
     description: Mapped[str | None] = mapped_column(String(255), default=None)
+    is_fake: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), index=True
     )
 
 
 class QrScan(Base):
+    """Successful QR visit. Cooldown per user+shop is enforced in scans.py."""
+
     __tablename__ = "qr_scans"
-    __table_args__ = (
-        UniqueConstraint(
-            "user_id", "shop_id", "scan_date", name="uq_qr_scan_user_shop_day"
-        ),
-    )
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(
@@ -296,6 +456,7 @@ class QrScan(Base):
     )
     points: Mapped[int] = mapped_column(Integer)
     scan_date: Mapped[date] = mapped_column(Date, index=True)
+    is_fake: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
@@ -329,6 +490,7 @@ class Redemption(Base):
     requested_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
+    is_fake: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
@@ -350,6 +512,7 @@ class RedemptionEvent(Base):
     )
     status: Mapped[str] = mapped_column(String(30))
     note: Mapped[str | None] = mapped_column(String(255), default=None)
+    is_fake: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )

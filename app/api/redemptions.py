@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -17,6 +17,7 @@ from app.schemas import (
     RedemptionUseIn,
 )
 from app.services.points import apply_points
+from app.services.towns import assign_user_to_town
 
 router = APIRouter(prefix="/redemptions", tags=["redemptions"])
 
@@ -52,7 +53,11 @@ async def create_redemption(
     db: AsyncSession = Depends(get_db),
 ):
     reward = await db.get(Reward, payload.reward_id)
-    if not reward or reward.status != "active":
+    if (
+        not reward
+        or reward.status != "active"
+        or reward.is_fake != user.is_fake
+    ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Reward not available")
     if user.town_id and reward.town_id != user.town_id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Out of town scope")
@@ -71,6 +76,7 @@ async def create_redemption(
         status=initial_status(flow),
         amount=payload.amount,
         shop_id=payload.shop_id,
+        is_fake=user.is_fake,
     )
     db.add(redemption)
     await db.flush()
@@ -79,6 +85,7 @@ async def create_redemption(
             redemption_id=redemption.id,
             status=redemption.status,
             note="Created",
+            is_fake=user.is_fake,
         )
     )
     try:
@@ -100,8 +107,7 @@ async def create_redemption(
             reward.status = "sold_out"
 
     # Link resident to town on first redemption if missing.
-    if not user.town_id:
-        user.town_id = reward.town_id
+    await assign_user_to_town(db, user, reward.town_id)
 
     await db.commit()
     redemption = await _load(db, redemption.id)
@@ -116,13 +122,20 @@ async def list_redemptions(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    stmt = select(Redemption).options(selectinload(Redemption.events))
-    if user.role == "admin":
+    stmt = select(Redemption).options(selectinload(Redemption.events)).where(
+        Redemption.is_fake.is_(user.is_fake)
+    )
+    if user.has_role("admin"):
         if not user.town_id:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Admin has no town")
         stmt = stmt.where(Redemption.town_id == user.town_id)
-    elif user.role == "merchant":
+    elif user.has_role("merchant") and not user.has_role("resident"):
         stmt = stmt.where(Redemption.shop_id == user.shop_id)
+    elif user.has_role("merchant") and user.has_role("resident"):
+        # Dual role: own redemptions + shop queue (client can filter).
+        stmt = stmt.where(
+            or_(Redemption.user_id == user.id, Redemption.shop_id == user.shop_id)
+        )
     else:
         stmt = stmt.where(Redemption.user_id == user.id)
     if status_filter:

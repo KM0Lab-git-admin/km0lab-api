@@ -28,6 +28,7 @@ async def apply_points(
         points=points,
         ref_id=ref_id,
         description=description,
+        is_fake=user.is_fake,
     )
     db.add(tx)
     user.points = user.points + points
