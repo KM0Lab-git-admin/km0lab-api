@@ -241,6 +241,8 @@ async def test_qr_scan_awards_points_with_cooldown(
     from app.models import PointAction
 
     town, _ = await _create_town(db_session, postal_code="08384")
+    # Points come from town config, not action/shop.
+    town.default_visit_points = 7
     shop = Shop(
         town_id=town.id,
         name="Botiga",
@@ -279,9 +281,9 @@ async def test_qr_scan_awards_points_with_cooldown(
     )
     assert r.status_code == 201, r.text
     body = r.json()
-    assert body["points"] == 100
+    assert body["points"] == 7
     assert body["shop_name"] == "Botiga"
-    assert body["balance"] == balance_before + 100
+    assert body["balance"] == balance_before + 7
     assert body["available_at"]
 
     r = await client.post(
@@ -350,12 +352,13 @@ async def test_points_history_balance_and_filters(
     from app.models import PointAction
 
     town, _ = await _create_town(db_session, postal_code="08386")
+    town.default_visit_points = 20
     shop = Shop(
         town_id=town.id,
         name="Forn Test",
         categories=[],
         contact_email="forn@test.cat",
-        visit_points=20,
+        visit_points=99,
         status="active",
         qr_code="HISTQR",
     )
@@ -366,7 +369,7 @@ async def test_points_history_balance_and_filters(
             type="qr_scan",
             name="Escaneig d'un comerç",
             description="Visita",
-            points=20,
+            points=99,
             cooldown_days=1,
             active=True,
             is_fake=False,

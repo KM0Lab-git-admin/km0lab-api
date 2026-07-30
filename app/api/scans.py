@@ -1,7 +1,7 @@
 """QR scan validation — awards visit points via the ledger (resident).
 
-Points and reactivation interval come from the town's active `qr_scan`
-point action (same for all shops). Fallback: shop.visit_points + 30 days.
+Points come from the town config (``default_visit_points``). Cooldown may
+come from an active ``qr_scan`` catalog action; otherwise 30 days.
 """
 
 from datetime import date, datetime, timedelta, timezone
@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.deps import require_resident
-from app.models import QrScan, Shop, User
+from app.models import QrScan, Shop, Town, User
 from app.schemas import ScanIn, ScanOut
 from app.services.action_grants import ACTION_TYPE_QR_SCAN, find_active_action
 from app.services.points import apply_points
@@ -50,25 +50,31 @@ async def scan_qr(
     if not shop or shop.status != "active":
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Invalid QR")
 
-    # Temporarily bind town so find_active_action can scope the catalog rule.
+    town = await db.get(Town, shop.town_id)
+    if town is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Town not found")
+
     await assign_user_to_town(db, user, shop.town_id)
 
+    # Points always from population config (BO Configuració).
+    points = town.default_visit_points
+    if points <= 0:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, detail="QR scan awards no points"
+        )
+
+    # Optional catalog action: cooldown + ledger description only.
     action = await find_active_action(
         db,
         action_type=ACTION_TYPE_QR_SCAN,
         user=user,
         town_id=shop.town_id,
     )
-    points = action.points if action is not None else shop.visit_points
     cooldown_days = (
         action.cooldown_days
         if action is not None and action.cooldown_days is not None
         else DEFAULT_COOLDOWN_DAYS
     )
-    if points <= 0:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, detail="QR scan awards no points"
-        )
 
     last = (
         await db.execute(
@@ -110,6 +116,9 @@ async def scan_qr(
     db.add(scan)
     await db.flush()
 
+    description = (
+        action.name if action and action.name else f"QR scan at {shop.name}"
+    )
     try:
         await apply_points(
             db,
@@ -118,7 +127,7 @@ async def scan_qr(
             type="scan",
             town_id=shop.town_id,
             ref_id=scan.id,
-            description=action.name if action else f"QR scan at {shop.name}",
+            description=description,
         )
         await db.commit()
     except ValueError as exc:

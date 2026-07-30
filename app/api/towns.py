@@ -1,6 +1,6 @@
-"""Town config endpoints (admin of that town) + brand media."""
+"""Town config endpoints (admin of that town) + brand media + public rules."""
 
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -8,13 +8,14 @@ from sqlalchemy.orm import selectinload
 from app.db import get_db
 from app.deps import assert_town_scope, require_admin
 from app.models import Town, User
-from app.schemas import TownMediaOut, TownOut, TownUpdate
+from app.schemas import TownMediaOut, TownOut, TownPublicOut, TownUpdate
 from app.services.town_media import (
     delete_town_media,
     get_town_media,
     media_public_path,
     upsert_town_media,
 )
+from app.services.towns import get_postal_code
 from app.utils.slug import slugify
 
 router = APIRouter(prefix="/towns", tags=["towns"])
@@ -39,6 +40,21 @@ def _to_out(town: Town) -> TownOut:
     return data
 
 
+def _to_public(town: Town) -> TownPublicOut:
+    has_logo = any(m.kind == "logo" for m in (town.media or []))
+    logo_url = media_public_path(town.id, "logo") if has_logo else town.logo_url
+    return TownPublicOut(
+        id=town.id,
+        name=town.name,
+        logo_url=logo_url,
+        has_logo=has_logo,
+        points_per_euro=town.points_per_euro,
+        default_visit_points=town.default_visit_points,
+        default_lang=town.default_lang,
+        expiry_months=town.expiry_months,
+    )
+
+
 @router.get("/me", response_model=TownOut)
 async def get_my_town(
     user: User = Depends(require_admin),
@@ -50,6 +66,33 @@ async def get_my_town(
     if not town:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Town not found")
     return _to_out(town)
+
+
+@router.get("/public", response_model=TownPublicOut)
+async def get_town_public(
+    postal_code: str = Query(
+        ...,
+        min_length=4,
+        max_length=10,
+        description="Postal code that resolves to a town (e.g. 08380)",
+    ),
+    db: AsyncSession = Depends(get_db),
+):
+    """Public town rules for the residents app (no auth).
+
+    Resolves ``postal_code`` → town and returns logo + point rules used when
+    scanning QRs (``default_visit_points``) and converting euros.
+    """
+    postal = await get_postal_code(db, postal_code.strip())
+    if postal is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail="Unknown postal code",
+        )
+    town = await _load_town(db, postal.town_id)
+    if town is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Town not found")
+    return _to_public(town)
 
 
 @router.get("/{town_id}", response_model=TownOut)

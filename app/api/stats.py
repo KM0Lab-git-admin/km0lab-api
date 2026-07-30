@@ -7,8 +7,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
-from app.deps import require_admin, require_merchant
-from app.models import PointAction, Promotion, QrScan, Redemption, TownPostalCode, User
+from app.deps import require_admin, resolve_acting_shop
+from app.models import PointAction, Promotion, QrScan, Redemption, Shop, TownPostalCode, User
 from app.schemas import AdminStatsOut, MerchantStatsOut
 
 router = APIRouter(prefix="/stats", tags=["stats"])
@@ -98,25 +98,23 @@ async def admin_stats(
 
 @router.get("/merchant", response_model=MerchantStatsOut)
 async def merchant_stats(
-    user: User = Depends(require_merchant),
+    shop: Shop = Depends(resolve_acting_shop),
     db: AsyncSession = Depends(get_db),
 ):
-    if not user.shop_id:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="No shop linked")
-    shop_id = user.shop_id
+    shop_id = shop.id
 
     total_scans = (
         await db.execute(
             select(func.count())
             .select_from(QrScan)
-            .where(QrScan.shop_id == shop_id, QrScan.is_fake.is_(user.is_fake))
+            .where(QrScan.shop_id == shop_id, QrScan.is_fake.is_(shop.is_fake))
         )
     ).scalar_one()
 
     unique_visitors = (
         await db.execute(
             select(func.count(func.distinct(QrScan.user_id))).where(
-                QrScan.shop_id == shop_id, QrScan.is_fake.is_(user.is_fake)
+                QrScan.shop_id == shop_id, QrScan.is_fake.is_(shop.is_fake)
             )
         )
     ).scalar_one()
@@ -124,7 +122,7 @@ async def merchant_stats(
     points_awarded = (
         await db.execute(
             select(func.coalesce(func.sum(QrScan.points), 0)).where(
-                QrScan.shop_id == shop_id, QrScan.is_fake.is_(user.is_fake)
+                QrScan.shop_id == shop_id, QrScan.is_fake.is_(shop.is_fake)
             )
         )
     ).scalar_one()
@@ -136,7 +134,7 @@ async def merchant_stats(
             .where(
                 Promotion.shop_id == shop_id,
                 Promotion.active.is_(True),
-                Promotion.is_fake.is_(user.is_fake),
+                Promotion.is_fake.is_(shop.is_fake),
             )
         )
     ).scalar_one()

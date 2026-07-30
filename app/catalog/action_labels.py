@@ -1,9 +1,12 @@
 """Fixed point-action catalog labels (ca/es/en).
 
-For fixed action types (signup, birthday, qr_scan, first_scan, web_visit,
-web_signup, event) the resident-facing name/description are NOT editable in
-the BO and are served translated from this catalog by the requested lang.
-Only ``custom`` actions store admin-written text (name_i18n / description_i18n).
+For fixed action types (signup, birthday, qr_scan, first_scan) the
+resident-facing name/description are NOT editable in the BO and are served
+translated from this catalog by the requested lang.
+
+Editable types (web_visit, web_signup, event, custom) store admin-written
+text in name_i18n / description_i18n; empty languages are auto-filled from
+the source language on save.
 """
 
 from __future__ import annotations
@@ -37,21 +40,6 @@ FIXED_ACTION_LABELS: dict[str, dict[str, dict[str, str]]] = {
         "ca": {"name": "Primer escaneig d'un comerç", "description": "Bonificació única la primera vegada que s'escaneja un QR de comerç"},
         "es": {"name": "Primer escaneo de un comercio", "description": "Bonificación única la primera vez que se escanea un QR de comercio"},
         "en": {"name": "First merchant scan", "description": "One-time bonus the first time a merchant QR is scanned"},
-    },
-    "web_visit": {
-        "ca": {"name": "Visita la web de turisme", "description": "Visita la web municipal de turisme"},
-        "es": {"name": "Visita la web de turismo", "description": "Visita la web municipal de turismo"},
-        "en": {"name": "Visit the tourism website", "description": "Visit the municipal tourism website"},
-    },
-    "web_signup": {
-        "ca": {"name": "Registre al butlletí municipal", "description": "Subscripció al butlletí"},
-        "es": {"name": "Registro al boletín municipal", "description": "Suscripción al boletín"},
-        "en": {"name": "Newsletter signup", "description": "Subscribe to the newsletter"},
-    },
-    "event": {
-        "ca": {"name": "Inscripció a la Festa Major", "description": "Inscripció a un esdeveniment municipal"},
-        "es": {"name": "Inscripción a la Fiesta Mayor", "description": "Inscripción a un evento municipal"},
-        "en": {"name": "Festa Major signup", "description": "Signup to a municipal event"},
     },
 }
 

@@ -1,5 +1,7 @@
 """Shop CRUD (admin) + merchant profile / QR / binary media."""
 
+from datetime import datetime, timedelta, timezone
+
 from fastapi import (
     APIRouter,
     Depends,
@@ -20,12 +22,21 @@ from app.deps import (
     assert_town_scope,
     get_current_user,
     require_admin,
-    require_merchant,
+    require_resident,
+    resolve_acting_shop,
 )
 from app.catalog.i18n import DEFAULT_LANG, normalize_lang, resolve_i18n
 from app.models import QrScan, Shop, Town, User
-from app.schemas import QrOut, ShopCreate, ShopOut, ShopProfileUpdate, ShopUpdate
+from app.schemas import (
+    QrOut,
+    ShopCreate,
+    ShopOut,
+    ShopResidentOut,
+    ShopProfileUpdate,
+    ShopUpdate,
+)
 from app.schemas.shops import ShopMediaOut
+from app.services.action_grants import ACTION_TYPE_QR_SCAN, find_active_action
 from app.services.i18n_fields import apply_text_i18n
 from app.services.shop_categories import resolve_category_slugs
 from app.services.shop_media import (
@@ -40,6 +51,18 @@ from app.services.towns import get_postal_code
 
 router = APIRouter(prefix="/shops", tags=["shops"])
 
+DEFAULT_COOLDOWN_DAYS = 30
+
+
+def _aware(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _available_at(last_scan_at: datetime, cooldown_days: int) -> datetime:
+    return _aware(last_scan_at) + timedelta(days=cooldown_days)
+
 
 async def _shop_out(
     db: AsyncSession,
@@ -51,6 +74,7 @@ async def _shop_out(
     kinds = await media_kinds_present(db, shop.id)
     has_logo = "logo" in kinds
     has_hero = "hero" in kinds
+    town = await db.get(Town, shop.town_id)
     data = ShopOut.model_validate(shop)
     fb = fallback_lang or DEFAULT_LANG
     resolved = normalize_lang(lang) if lang else fb
@@ -59,6 +83,7 @@ async def _shop_out(
     )
     return data.model_copy(
         update={
+            "town_name": town.name if town else None,
             "has_logo": has_logo,
             "has_hero": has_hero,
             "logo_url": media_public_path(shop.id, "logo")
@@ -175,6 +200,113 @@ async def list_shops_public(
     ]
 
 
+@router.get("/for-me", response_model=list[ShopResidentOut])
+async def list_shops_for_resident(
+    postal_code: str | None = Query(
+        default=None,
+        min_length=4,
+        max_length=10,
+        description=(
+            "Postal code that resolves to a town. "
+            "Defaults to the authenticated user's postal_code."
+        ),
+    ),
+    lang: str | None = Query(
+        default=None,
+        description="Response language (ca|es|en). Defaults to the town's default_lang.",
+    ),
+    user: User = Depends(require_resident),
+    db: AsyncSession = Depends(get_db),
+):
+    """Resident shop list for a town, with this user's QR scan state.
+
+    Note: ``GET /shops/me`` is the merchant profile; this endpoint is the
+    resident catalog with ``scanned`` / ``scan_available`` per shop.
+    Partition matches ``user.is_fake`` (same as ``POST /scans``).
+    """
+    cp = (postal_code or user.postal_code or "").strip()
+    if not cp:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="postal_code required (query or user profile)",
+        )
+    postal = await get_postal_code(db, cp)
+    if postal is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail="Unknown postal code",
+        )
+    town = await db.get(Town, postal.town_id)
+    fallback = (town.default_lang if town else DEFAULT_LANG) or DEFAULT_LANG
+    # Scans are partitioned by user.is_fake — list the same partition.
+    use_demo = user.is_fake
+
+    rows = (
+        await db.execute(
+            select(Shop)
+            .where(
+                Shop.town_id == postal.town_id,
+                Shop.is_fake.is_(use_demo),
+                Shop.status == "active",
+            )
+            .order_by(Shop.created_at.desc())
+        )
+    ).scalars().all()
+    if not rows:
+        return []
+
+    shop_ids = [s.id for s in rows]
+    last_scans = (
+        await db.execute(
+            select(QrScan)
+            .where(
+                QrScan.user_id == user.id,
+                QrScan.shop_id.in_(shop_ids),
+            )
+            .order_by(QrScan.created_at.desc())
+        )
+    ).scalars().all()
+    last_by_shop: dict[str, QrScan] = {}
+    for scan in last_scans:
+        if scan.shop_id not in last_by_shop:
+            last_by_shop[scan.shop_id] = scan
+
+    action = await find_active_action(
+        db,
+        action_type=ACTION_TYPE_QR_SCAN,
+        user=user,
+        town_id=postal.town_id,
+    )
+    cooldown_days = (
+        action.cooldown_days
+        if action is not None and action.cooldown_days is not None
+        else DEFAULT_COOLDOWN_DAYS
+    )
+
+    now = datetime.now(timezone.utc)
+    out: list[ShopResidentOut] = []
+    for shop in rows:
+        base = await _shop_out(db, shop, lang=lang, fallback_lang=fallback)
+        last = last_by_shop.get(shop.id)
+        scanned = last is not None
+        available_at: str | None = None
+        scan_available = True
+        if last is not None:
+            nxt = _available_at(last.created_at, cooldown_days)
+            available_at = nxt.date().isoformat()
+            scan_available = now >= nxt
+        out.append(
+            ShopResidentOut(
+                **base.model_dump(),
+                scanned=scanned,
+                last_scanned_at=last.created_at if last else None,
+                available_at=available_at,
+                scan_available=scan_available,
+            )
+        )
+    return out
+
+
 @router.get("", response_model=list[ShopOut])
 async def list_shops(
     status_filter: str | None = Query(default=None, alias="status"),
@@ -224,6 +356,9 @@ async def create_shop(
         contact_email=payload.contact_email.lower(),
         visit_points=visit_points,
         address=payload.address,
+        postal_code=payload.postal_code,
+        phone=payload.phone,
+        website=payload.website,
         opening_hours=(
             payload.opening_hours.model_dump() if payload.opening_hours else None
         ),
@@ -249,14 +384,9 @@ async def create_shop(
 @router.get("/me", response_model=ShopOut)
 async def get_my_shop(
     lang: str | None = Query(default=None),
-    user: User = Depends(require_merchant),
+    shop: Shop = Depends(resolve_acting_shop),
     db: AsyncSession = Depends(get_db),
 ):
-    if not user.shop_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No shop linked")
-    shop = await db.get(Shop, user.shop_id)
-    if not shop:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Shop not found")
     fallback = await _default_lang_for_shop(db, shop)
     return await _shop_out(db, shop, lang=lang, fallback_lang=fallback)
 
@@ -264,14 +394,9 @@ async def get_my_shop(
 @router.patch("/me", response_model=ShopOut)
 async def update_my_shop(
     payload: ShopProfileUpdate,
-    user: User = Depends(require_merchant),
+    shop: Shop = Depends(resolve_acting_shop),
     db: AsyncSession = Depends(get_db),
 ):
-    if not user.shop_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No shop linked")
-    shop = await db.get(Shop, user.shop_id)
-    if not shop:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Shop not found")
     default_lang = await _default_lang_for_shop(db, shop)
     data = payload.model_dump(exclude_unset=True)
     if "categories" in data:
@@ -298,14 +423,9 @@ async def update_my_shop(
 async def upload_my_media(
     kind: str,
     file: UploadFile = File(...),
-    user: User = Depends(require_merchant),
+    shop: Shop = Depends(resolve_acting_shop),
     db: AsyncSession = Depends(get_db),
 ):
-    if not user.shop_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No shop linked")
-    shop = await db.get(Shop, user.shop_id)
-    if not shop:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Shop not found")
     row = await upsert_shop_media(db, shop_id=shop.id, kind=kind, upload=file)
     await db.commit()
     return ShopMediaOut(
@@ -320,12 +440,10 @@ async def upload_my_media(
 @router.delete("/me/media/{kind}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_my_media(
     kind: str,
-    user: User = Depends(require_merchant),
+    shop: Shop = Depends(resolve_acting_shop),
     db: AsyncSession = Depends(get_db),
 ):
-    if not user.shop_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No shop linked")
-    deleted = await delete_shop_media(db, shop_id=user.shop_id, kind=kind)
+    deleted = await delete_shop_media(db, shop_id=shop.id, kind=kind)
     if not deleted:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Media not found")
     await db.commit()
@@ -333,32 +451,22 @@ async def delete_my_media(
 
 @router.get("/me/qr", response_model=QrOut)
 async def get_my_qr(
-    user: User = Depends(require_merchant),
+    shop: Shop = Depends(resolve_acting_shop),
     db: AsyncSession = Depends(get_db),
 ):
     """Merchant 'Mi QR' screen: PNG URL + scan/points stats."""
-    if not user.shop_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No shop linked")
-    shop = await db.get(Shop, user.shop_id)
-    if not shop:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Shop not found")
-    out = await _qr_out(db, shop, is_fake=user.is_fake)
+    out = await _qr_out(db, shop, is_fake=shop.is_fake)
     await db.commit()
     return out
 
 
 @router.post("/me/qr", response_model=QrOut)
 async def generate_my_qr(
-    user: User = Depends(require_merchant),
+    shop: Shop = Depends(resolve_acting_shop),
     db: AsyncSession = Depends(get_db),
 ):
     """Idempotent: ensure token+PNG exist (does not rotate)."""
-    if not user.shop_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No shop linked")
-    shop = await db.get(Shop, user.shop_id)
-    if not shop:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Shop not found")
-    out = await _qr_out(db, shop, is_fake=user.is_fake)
+    out = await _qr_out(db, shop, is_fake=shop.is_fake)
     await db.commit()
     return out
 

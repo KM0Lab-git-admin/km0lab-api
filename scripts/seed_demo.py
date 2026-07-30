@@ -1,13 +1,10 @@
-"""Seed / refresh demo users + fake Demo KM0 content.
+"""Seed demo users + fake Demo KM0 content (insert-only).
 
-Idempotent: safe to re-run. Requires Demo town + CP 00000 (scripts.seed
-ensure_demo_town) and ideally Malgrat for municipal fallback context.
+Safe to re-run: never deletes or overwrites existing rows (shops, promos,
+rewards, point actions, users, redemptions, i18n, media, BO config).
+Only creates missing demo pieces.
 
-Preserves reward_media and admin-created rewards. Catalog [DEMO] rewards
-use stable ids and are upserted in place (images stay attached).
-
-Creates 2 complete fake shops per category (with QR PNG), demo users,
-promotions/reward on the merchant's shop, and extra fake residents.
+Requires Demo town + CP 00000 (scripts.seed / ensure_demo_town).
 
     python -m scripts.seed_demo
 
@@ -22,11 +19,13 @@ Use app postal code 00000 (Demo KM0). Malgrat 08380 stays real-only.
 from __future__ import annotations
 
 import asyncio
+import io
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import delete, or_, select
+from PIL import Image, ImageDraw
+from sqlalchemy import select
 
 from app.catalog.point_actions import ensure_town_point_actions
 from app.catalog.rewards import seed_fake_rewards
@@ -40,8 +39,8 @@ from app.demo import (
     DEMO_RESIDENT_EMAIL,
 )
 from app.models import (
-    PointAction,
     Promotion,
+    QrScan,
     Redemption,
     RedemptionEvent,
     Reward,
@@ -54,9 +53,11 @@ from app.models import (
 )
 from app.roles import flags_from_roles
 from app.schemas.opening_hours import OpeningHours
+from app.services.action_grants import ACTION_TYPE_QR_SCAN, find_active_action
 from app.services.points import apply_points
+from app.services.shop_media import media_kinds_present
 from app.services.shop_qr import ensure_shop_qr
-from app.services.towns import ensure_demo_town, resolve_malgrat_town
+from app.services.towns import ensure_demo_town
 from app.utils.slug import slugify, split_full_name
 
 settings = get_settings()
@@ -775,84 +776,27 @@ async def _demo_town(db) -> Town:
     return town
 
 
-async def _purge_fake(db) -> None:
-    """Reset demo ledger/users/shops; never wipe reward_media or admin rewards.
-
-    Catalog [DEMO] rewards are upserted later with stable ids (see
-    seed_fake_rewards). Admin-created fake rewards and any uploaded
-    reward_media rows are left untouched.
-    """
-    from app.models import PointsTransaction, QrScan
-
-    fake_user_ids = (
-        await db.execute(select(User.id).where(User.is_fake.is_(True)))
-    ).scalars().all()
-    fake_shops = (
-        await db.execute(select(Shop.id).where(Shop.is_fake.is_(True)))
-    ).scalars().all()
-    # Only purge seeded catalog redemptions/ledger — not reward rows/media.
-    fake_redemptions = (
-        await db.execute(
-            select(Redemption.id).where(
-                or_(
-                    Redemption.is_fake.is_(True),
-                    Redemption.user_id.in_(fake_user_ids or [""]),
-                )
-            )
-        )
-    ).scalars().all()
-
-    if fake_redemptions:
-        await db.execute(
-            delete(RedemptionEvent).where(
-                RedemptionEvent.redemption_id.in_(fake_redemptions)
-            )
-        )
-        await db.execute(
-            delete(Redemption).where(Redemption.id.in_(fake_redemptions))
-        )
-    await db.execute(delete(ShopPayment).where(ShopPayment.is_fake.is_(True)))
-    await db.execute(
-        delete(QrScan).where(
-            or_(
-                QrScan.is_fake.is_(True),
-                QrScan.user_id.in_(fake_user_ids or [""]),
-            )
-        )
-    )
-    await db.execute(
-        delete(PointsTransaction).where(
-            or_(
-                PointsTransaction.is_fake.is_(True),
-                PointsTransaction.user_id.in_(fake_user_ids or [""]),
-            )
-        )
-    )
-    # Do NOT delete Reward / RewardMedia / RewardShop / PointAction here.
-    # Catalogs are upserted in place so BO config (visible_home, points, media) persists.
-    await db.execute(delete(Promotion).where(Promotion.is_fake.is_(True)))
-    if fake_user_ids:
-        for u in (
-            await db.execute(select(User).where(User.id.in_(fake_user_ids)))
-        ).scalars().all():
-            u.shop_id = None
-        await db.flush()
-    if fake_shops:
-        await db.execute(delete(ShopMedia).where(ShopMedia.shop_id.in_(fake_shops)))
-        await db.execute(delete(Shop).where(Shop.id.in_(fake_shops)))
-    if fake_user_ids:
-        await db.execute(delete(User).where(User.id.in_(fake_user_ids)))
-    await db.flush()
-
-
-async def _create_shop(
+async def _ensure_shop(
     db,
     *,
     town_id: str,
     category: str,
     spec: dict,
     qr_code: str | None = None,
-) -> Shop:
+) -> tuple[Shop, bool]:
+    """Return existing fake shop by name, or create it. Never overwrites."""
+    existing = (
+        await db.execute(
+            select(Shop).where(
+                Shop.town_id == town_id,
+                Shop.is_fake.is_(True),
+                Shop.name == spec["name"],
+            )
+        )
+    ).scalars().first()
+    if existing is not None:
+        return existing, False
+
     shop = Shop(
         id=_id(),
         town_id=town_id,
@@ -871,10 +815,85 @@ async def _create_shop(
         qr_code=qr_code,
         is_fake=True,
     )
+    if qr_code == "DEMO-KM0-QR":
+        shop.contact_email = DEMO_MERCHANT_EMAIL
     db.add(shop)
     await db.flush()
     await ensure_shop_qr(db, shop)
-    return shop
+    return shop, True
+
+
+async def _ensure_promos_for_shop(
+    db, shop: Shop, category: str
+) -> int:
+    """Add default promos only when the shop has none (fake)."""
+    existing = (
+        await db.execute(
+            select(Promotion.id).where(
+                Promotion.shop_id == shop.id,
+                Promotion.is_fake.is_(True),
+            )
+        )
+    ).scalars().first()
+    if existing is not None:
+        return 0
+    created = 0
+    for promo in _promos_for_shop(shop, category):
+        db.add(promo)
+        created += 1
+    await db.flush()
+    return created
+
+
+async def _get_user_by_email(db, email: str) -> User | None:
+    return (
+        await db.execute(select(User).where(User.email == email))
+    ).scalars().first()
+
+
+async def _ensure_demo_user(
+    db,
+    *,
+    town_id: str,
+    email: str,
+    slug: str,
+    first_name: str,
+    last_name: str,
+    roles: list[str],
+    shop_id: str | None = None,
+    points: int | None = None,
+    contact_shared: bool = False,
+    points_note: str = "[DEMO] Welcome bonus",
+) -> tuple[User, bool]:
+    """Create demo user if missing. Existing users are never modified."""
+    existing = await _get_user_by_email(db, email)
+    if existing is not None:
+        return existing, False
+    user = User(
+        id=_id(),
+        email=email,
+        slug=slug,
+        first_name=first_name,
+        last_name=last_name,
+        postal_code=DEMO_POSTAL_CODE,
+        shop_id=shop_id,
+        is_fake=True,
+        contact_shared=contact_shared,
+        points=0,
+        **flags_from_roles(roles),
+    )
+    db.add(user)
+    await db.flush()
+    if points:
+        await apply_points(
+            db,
+            user=user,
+            points=points,
+            type="welcome",
+            town_id=town_id,
+            description=points_note,
+        )
+    return user, True
 
 
 def _promos_for_shop(shop: Shop, category: str) -> list[Promotion]:
@@ -1272,35 +1291,125 @@ async def _seed_fake_redemptions(
     return len(created), 2, fleca_pending_codes
 
 
+async def _ensure_fake_qr_scans(
+    db,
+    *,
+    shop: Shop,
+    residents: list[User],
+) -> int:
+    """Insert-only fake QR visits for the merchant shop (Mi QR metrics).
+
+    Returns the number of scans created this run (0 if already present).
+    """
+    existing = (
+        await db.execute(
+            select(QrScan.id).where(
+                QrScan.shop_id == shop.id,
+                QrScan.is_fake.is_(True),
+            )
+        )
+    ).scalars().first()
+    if existing is not None:
+        return 0
+
+    if not residents:
+        return 0
+
+    action = await find_active_action(
+        db,
+        action_type=ACTION_TYPE_QR_SCAN,
+        user=residents[0],
+        town_id=shop.town_id,
+    )
+    points = action.points if action is not None else shop.visit_points
+    if points <= 0:
+        points = max(shop.visit_points, 1)
+    description = (
+        action.name if action is not None else f"[DEMO] QR scan at {shop.name}"
+    )
+
+    # ~10 scans across residents, staggered over recent days.
+    target = min(10, max(8, len(residents)))
+    created = 0
+    today = date.today()
+    for i in range(target):
+        user = residents[i % len(residents)]
+        scan_day = today - timedelta(days=(i % 14) + 1)
+        scan = QrScan(
+            id=_id(),
+            user_id=user.id,
+            shop_id=shop.id,
+            points=points,
+            scan_date=scan_day,
+            is_fake=True,
+        )
+        db.add(scan)
+        await db.flush()
+        await apply_points(
+            db,
+            user=user,
+            points=points,
+            type="scan",
+            town_id=shop.town_id,
+            ref_id=scan.id,
+            description=f"[DEMO] {description}",
+        )
+        created += 1
+
+    return created
+
+
+def _demo_png(size: tuple[int, int], color: tuple[int, int, int], label: str) -> bytes:
+    """Solid-color PNG with a short label (Pillow via qrcode[pil])."""
+    img = Image.new("RGB", size, color)
+    draw = ImageDraw.Draw(img)
+    text = (label or "KM0")[:18]
+    # Approximate center without depending on a TTF font.
+    tw = len(text) * 6
+    th = 10
+    xy = ((size[0] - tw) // 2, (size[1] - th) // 2)
+    draw.text(xy, text, fill=(255, 255, 255))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+async def _ensure_fake_shop_media(db, shop: Shop) -> int:
+    """Insert-only logo + hero BLOBs for a fake shop. Returns kinds added."""
+    present = await media_kinds_present(db, shop.id)
+    added = 0
+    specs: list[tuple[str, tuple[int, int], tuple[int, int, int]]] = [
+        ("logo", (256, 256), (30, 64, 120)),
+        ("hero", (800, 450), (20, 90, 110)),
+    ]
+    label = (shop.name or "DEMO").replace("[DEMO] ", "")
+    for kind, size, color in specs:
+        if kind in present:
+            continue
+        data = _demo_png(size, color, label if kind == "logo" else f"{label} · hero")
+        db.add(
+            ShopMedia(
+                id=_id(),
+                shop_id=shop.id,
+                kind=kind,
+                content_type="image/png",
+                data=data,
+                byte_size=len(data),
+            )
+        )
+        added += 1
+    if added:
+        await db.flush()
+    return added
+
+
 async def seed_demo() -> None:
     async with SessionLocal() as db:
         town = await _demo_town(db)
-        await _purge_fake(db)
-
-        # Drop leftover fake catalog on Malgrat so 08380 stays real-only.
-        malgrat = await resolve_malgrat_town(db)
-        if malgrat is not None and malgrat.id != town.id:
-            await db.execute(
-                delete(PointAction).where(
-                    PointAction.town_id == malgrat.id,
-                    PointAction.is_fake.is_(True),
-                )
-            )
-            # Re-home leftover fake rewards still pointing at Malgrat.
-            leftover_rewards = (
-                await db.execute(
-                    select(Reward).where(
-                        Reward.town_id == malgrat.id,
-                        Reward.is_fake.is_(True),
-                    )
-                )
-            ).scalars().all()
-            for reward in leftover_rewards:
-                reward.town_id = town.id
-            await db.flush()
 
         shops: list[Shop] = []
         shop_categories: list[str] = []
+        shops_created = 0
         merchant_shop: Shop | None = None
 
         for category, _order in DEFAULT_SHOP_CATEGORIES:
@@ -1310,146 +1419,154 @@ async def seed_demo() -> None:
                     f"Need 2 fake shops for category {category!r}"
                 )
             for i, spec in enumerate(specs[:2]):
-                # Keep stable QR on the primary demo merchant shop.
                 qr = "DEMO-KM0-QR" if category == "bakery" and i == 0 else None
-                shop = await _create_shop(
+                shop, created = await _ensure_shop(
                     db,
                     town_id=town.id,
                     category=category,
                     spec=spec,
                     qr_code=qr,
                 )
+                if created:
+                    shops_created += 1
                 shops.append(shop)
                 shop_categories.append(category)
                 if category == "bakery" and i == 0:
                     merchant_shop = shop
-                    shop.contact_email = DEMO_MERCHANT_EMAIL
 
         assert merchant_shop is not None
 
         promo_count = 0
         for shop, category in zip(shops, shop_categories, strict=True):
-            for promo in _promos_for_shop(shop, category):
-                db.add(promo)
-                promo_count += 1
-        await db.flush()
+            promo_count += await _ensure_promos_for_shop(db, shop, category)
 
-        action_count = await ensure_town_point_actions(db, town.id, is_fake=True)
+        # Insert-only: never touches existing action rows / name_i18n.
+        action_count = await ensure_town_point_actions(
+            db, town.id, is_fake=True
+        )
 
         reward_count = await seed_fake_rewards(
             db, town_id=town.id, shop_id=merchant_shop.id
         )
 
-        admin = User(
-            id=_id(),
+        await _ensure_demo_user(
+            db,
+            town_id=town.id,
             email=DEMO_ADMIN_EMAIL,
             slug="demo-admin",
             first_name="Demo",
             last_name="Admin",
-            postal_code=DEMO_POSTAL_CODE,
-            is_fake=True,
-            points=0,
-            **flags_from_roles(["resident", "admin"]),
+            roles=["resident", "admin"],
         )
-        merchant = User(
-            id=_id(),
+        await _ensure_demo_user(
+            db,
+            town_id=town.id,
             email=DEMO_MERCHANT_EMAIL,
             slug="demo-merchant",
             first_name="Demo",
             last_name="Merchant",
-            postal_code=DEMO_POSTAL_CODE,
+            roles=["resident", "merchant"],
             shop_id=merchant_shop.id,
-            is_fake=True,
-            points=0,
-            **flags_from_roles(["resident", "merchant"]),
+            points=settings.welcome_points,
         )
-        resident = User(
-            id=_id(),
+        resident, _ = await _ensure_demo_user(
+            db,
+            town_id=town.id,
             email=DEMO_RESIDENT_EMAIL,
             slug="demo-resident",
             first_name="Demo",
             last_name="Resident",
-            postal_code=DEMO_POSTAL_CODE,
-            is_fake=True,
-            points=0,
-            **flags_from_roles(["resident"]),
-        )
-        db.add_all([admin, merchant, resident])
-        await db.flush()
-
-        await apply_points(
-            db,
-            user=resident,
+            roles=["resident"],
             points=settings.welcome_points,
-            type="welcome",
-            town_id=town.id,
-            description="[DEMO] Welcome bonus",
-        )
-        await apply_points(
-            db,
-            user=merchant,
-            points=settings.welcome_points,
-            type="welcome",
-            town_id=town.id,
-            description="[DEMO] Welcome bonus",
         )
 
         fake_residents: list[User] = []
         for email, name, pts in FAKE_RESIDENTS:
             first, last = split_full_name(name)
-            u = User(
-                id=_id(),
+            u, _ = await _ensure_demo_user(
+                db,
+                town_id=town.id,
                 email=email,
                 slug=slugify(name),
                 first_name=first,
                 last_name=last,
-                postal_code=DEMO_POSTAL_CODE,
-                is_fake=True,
-                contact_shared=True,
-                points=0,
-                **flags_from_roles(["resident"]),
-            )
-            db.add(u)
-            await db.flush()
-            await apply_points(
-                db,
-                user=u,
+                roles=["resident"],
                 points=pts,
-                type="welcome",
-                town_id=town.id,
-                description="[DEMO] Fake resident balance",
+                contact_shared=True,
+                points_note="[DEMO] Fake resident balance",
             )
             fake_residents.append(u)
 
-        redemption_count, payment_count, fleca_codes = await _seed_fake_redemptions(
+        qr_scans_added = await _ensure_fake_qr_scans(
             db,
-            town=town,
-            participants=[*fake_residents, resident],
-            shops=shops,
-            fleca=merchant_shop,
+            shop=merchant_shop,
+            residents=[resident, *fake_residents],
         )
+
+        media_kinds_added = 0
+        for shop in shops:
+            media_kinds_added += await _ensure_fake_shop_media(db, shop)
+
+        existing_fake_redemption = (
+            await db.execute(
+                select(Redemption.id).where(
+                    Redemption.town_id == town.id,
+                    Redemption.is_fake.is_(True),
+                )
+            )
+        ).scalars().first()
+        if existing_fake_redemption is not None:
+            redemption_count, payment_count, fleca_codes = 0, 0, []
+        else:
+            redemption_count, payment_count, fleca_codes = (
+                await _seed_fake_redemptions(
+                    db,
+                    town=town,
+                    participants=[*fake_residents, resident],
+                    shops=shops,
+                    fleca=merchant_shop,
+                )
+            )
 
         await db.commit()
         n_cats = len(DEFAULT_SHOP_CATEGORIES)
-        print(f"Demo seed OK ({town.name} / CP {DEMO_POSTAL_CODE})")
-        print(f"  {len(shops)} fake shops ({n_cats} categories x 2) + QR PNG")
-        print(f"  {promo_count} fake promotions (2 per shop)")
-        print(f"  {action_count} fake point actions (demo admin catalog)")
-        print(f"  {reward_count} fake rewards (2+ per type + bonos 5/10/20/50 EUR)")
         print(
-            f"  {redemption_count} fake redemptions + {payment_count} shop payments"
+            f"Demo seed OK ({town.name} / CP {DEMO_POSTAL_CODE}) [insert-only]"
         )
         print(
-            f"  Fleca pending codes (Validar vals): "
-            f"{' / '.join(fleca_codes)}"
+            f"  shops: {len(shops)} present "
+            f"({shops_created} created this run, {n_cats} categories x 2)"
         )
+        print(f"  promotions added this run: {promo_count}")
+        print(f"  point actions catalog size: {action_count}")
+        print(f"  rewards catalog ensured: {reward_count}")
+        if existing_fake_redemption is not None:
+            print("  redemptions: skipped (already present)")
+        else:
+            print(
+                f"  {redemption_count} fake redemptions + "
+                f"{payment_count} shop payments"
+            )
+            if fleca_codes:
+                print(
+                    f"  Fleca pending codes (Validar vals): "
+                    f"{' / '.join(fleca_codes)}"
+                )
         print(f"  {DEMO_RESIDENT_EMAIL} / 123456  -> resident")
         print(f"  {DEMO_MERCHANT_EMAIL} / 123456  -> merchant+resident")
         print(f"  {DEMO_ADMIN_EMAIL} / 123456     -> admin+resident")
         print(f"  + {len(FAKE_RESIDENTS)} fake residents for admin stats")
+        if qr_scans_added:
+            print(f"  qr_scans added: {qr_scans_added}")
+        else:
+            print("  qr_scans: skipped (already present)")
+        if media_kinds_added:
+            print(f"  shop media (logo/hero) added: {media_kinds_added}")
+        else:
+            print("  shop media: skipped (already present)")
         print("  QR demo shop: DEMO-KM0-QR")
         print(f"  Demo postal code: {DEMO_POSTAL_CODE} ({town.name})")
-        print("  Malgrat 08380 stays real-only (municipal fallback for agenda/news)")
+        print("  No deletes / no overwrites (BO i18n and config preserved)")
 
 
 if __name__ == "__main__":

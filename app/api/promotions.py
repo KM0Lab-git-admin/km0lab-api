@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.catalog.i18n import DEFAULT_LANG, normalize_lang, resolve_i18n
 from app.db import get_db
 from app.demo import resolve_public_demo
-from app.deps import require_merchant
+from app.deps import resolve_acting_shop
 from app.models import Promotion, Shop, Town, User
 from app.schemas import PromotionCreate, PromotionOut, PromotionUpdate
 from app.services.i18n_fields import apply_text_i18n
@@ -167,22 +167,20 @@ async def list_promotions_public(
 @router.get("", response_model=list[PromotionOut])
 async def list_promotions(
     lang: str | None = Query(default=None),
-    user: User = Depends(require_merchant),
+    shop: Shop = Depends(resolve_acting_shop),
     db: AsyncSession = Depends(get_db),
 ):
-    if not user.shop_id:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="No shop linked")
     rows = (
         await db.execute(
             select(Promotion)
             .where(
-                Promotion.shop_id == user.shop_id,
-                Promotion.is_fake.is_(user.is_fake),
+                Promotion.shop_id == shop.id,
+                Promotion.is_fake.is_(shop.is_fake),
             )
             .order_by(Promotion.created_at.desc())
         )
     ).scalars().all()
-    fallback = await _town_default_lang(db, user.shop_id)
+    fallback = await _town_default_lang(db, shop.id)
     resolved = normalize_lang(lang) if lang else fallback
     return [_resolve_out(p, resolved, fallback) for p in rows]
 
@@ -190,14 +188,12 @@ async def list_promotions(
 @router.post("", response_model=PromotionOut, status_code=status.HTTP_201_CREATED)
 async def create_promotion(
     payload: PromotionCreate,
-    user: User = Depends(require_merchant),
+    shop: Shop = Depends(resolve_acting_shop),
     db: AsyncSession = Depends(get_db),
 ):
-    if not user.shop_id:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="No shop linked")
-    default_lang = await _town_default_lang(db, user.shop_id)
+    default_lang = await _town_default_lang(db, shop.id)
     promo = Promotion(
-        shop_id=user.shop_id,
+        shop_id=shop.id,
         type=payload.type,
         label="",
         title="",
@@ -208,7 +204,7 @@ async def create_promotion(
         valid_until=payload.valid_until,
         conditions=None,
         active=payload.active,
-        is_fake=user.is_fake,
+        is_fake=shop.is_fake,
     )
     await _apply_promo_i18n(
         promo,
@@ -235,13 +231,13 @@ async def create_promotion(
 async def update_promotion(
     promo_id: str,
     payload: PromotionUpdate,
-    user: User = Depends(require_merchant),
+    shop: Shop = Depends(resolve_acting_shop),
     db: AsyncSession = Depends(get_db),
 ):
     promo = await db.get(Promotion, promo_id)
-    if not promo or promo.shop_id != user.shop_id:
+    if not promo or promo.shop_id != shop.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Promotion not found")
-    default_lang = await _town_default_lang(db, user.shop_id)
+    default_lang = await _town_default_lang(db, shop.id)
     data = payload.model_dump(exclude_unset=True)
     label = data.pop("label", None)
     title = data.pop("title", None)
@@ -289,11 +285,11 @@ async def update_promotion(
 @router.delete("/{promo_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_promotion(
     promo_id: str,
-    user: User = Depends(require_merchant),
+    shop: Shop = Depends(resolve_acting_shop),
     db: AsyncSession = Depends(get_db),
 ):
     promo = await db.get(Promotion, promo_id)
-    if not promo or promo.shop_id != user.shop_id:
+    if not promo or promo.shop_id != shop.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Promotion not found")
     await db.delete(promo)
     await db.commit()

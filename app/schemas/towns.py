@@ -51,6 +51,19 @@ class TownPostalCodeCreate(BaseModel):
     is_primary: bool = False
 
 
+class TownPublicOut(BaseModel):
+    """Public town rules for the residents app (no auth)."""
+
+    id: str
+    name: str
+    logo_url: str | None = None
+    has_logo: bool = False
+    points_per_euro: int = 200
+    default_visit_points: int = 10
+    default_lang: str = "ca"
+    expiry_months: int | None = None
+
+
 class TownMediaOut(BaseModel):
     town_id: str
     kind: str

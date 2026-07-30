@@ -4,6 +4,7 @@ from app.schemas.users import UpdateUserIn
 from app.schemas.auth import AuthOut, MessageOut, RequestOtpIn, VerifyOtpIn, UserOut
 from app.schemas.towns import (
     TownOut,
+    TownPublicOut,
     TownUpdate,
     TownPostalCodeOut,
     TownPostalCodeCreate,
@@ -12,6 +13,7 @@ from app.schemas.towns import (
 from app.schemas.shops import (
     ShopCreate,
     ShopOut,
+    ShopResidentOut,
     ShopUpdate,
     ShopProfileUpdate,
     ShopMediaOut,
@@ -43,12 +45,14 @@ __all__ = [
     "UpdateUserIn",
     "UserOut",
     "TownOut",
+    "TownPublicOut",
     "TownUpdate",
     "TownPostalCodeOut",
     "TownPostalCodeCreate",
     "TownMediaOut",
     "ShopCreate",
     "ShopOut",
+    "ShopResidentOut",
     "ShopUpdate",
     "ShopProfileUpdate",
     "ShopMediaOut",

@@ -8,8 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db import get_db
-from app.deps import get_current_user, require_admin, require_merchant, require_resident
-from app.models import Redemption, RedemptionEvent, Reward, User
+from app.deps import get_current_user, require_admin, require_resident, resolve_acting_shop
+from app.models import Redemption, RedemptionEvent, Reward, Shop, User
 from app.schemas import (
     RedemptionCreate,
     RedemptionOut,
@@ -176,7 +176,7 @@ async def list_redemptions(
 @router.post("/validate", response_model=RedemptionOut)
 async def validate_voucher(
     payload: RedemptionValidateIn,
-    user: User = Depends(require_merchant),
+    shop: Shop = Depends(resolve_acting_shop),
     db: AsyncSession = Depends(get_db),
 ):
     """Merchant validates a voucher by its 5-digit code (lookup + use)."""
@@ -187,13 +187,13 @@ async def validate_voucher(
             .where(
                 Redemption.code == payload.code,
                 Redemption.flow == "voucher_qr",
-                Redemption.is_fake.is_(user.is_fake),
+                Redemption.is_fake.is_(shop.is_fake),
             )
         )
     ).scalars().first()
     if not redemption:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Voucher not found")
-    if redemption.shop_id and redemption.shop_id != user.shop_id:
+    if redemption.shop_id and redemption.shop_id != shop.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Out of shop scope")
     if redemption.status == "used":
         raise HTTPException(
@@ -210,7 +210,7 @@ async def validate_voucher(
     await _mark_used(
         db,
         redemption,
-        shop_id=user.shop_id,
+        shop_id=shop.id,
         amount_applied=payload.amount_applied,
     )
     await db.commit()
@@ -249,20 +249,20 @@ async def update_status(
 async def use_voucher(
     redemption_id: str,
     payload: RedemptionUseIn,
-    user: User = Depends(require_merchant),
+    shop: Shop = Depends(resolve_acting_shop),
     db: AsyncSession = Depends(get_db),
 ):
     redemption = await _load(db, redemption_id)
     if not redemption or redemption.flow != "voucher_qr":
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Voucher not found")
-    if redemption.shop_id and redemption.shop_id != user.shop_id:
+    if redemption.shop_id and redemption.shop_id != shop.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Out of shop scope")
     if redemption.status != "pending_use":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Not pending use")
     await _mark_used(
         db,
         redemption,
-        shop_id=user.shop_id,
+        shop_id=shop.id,
         amount_applied=payload.amount_applied,
     )
     await db.commit()
