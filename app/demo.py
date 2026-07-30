@@ -11,6 +11,14 @@ DEMO_RESIDENT_EMAIL = "resident@km0lab.com"
 DEMO_MERCHANT_EMAIL = "merchant@km0lab.com"
 DEMO_ADMIN_EMAIL = "admin@km0lab.com"
 
+# Fictional town for product demos / QA (separate from Malgrat real).
+DEMO_POSTAL_CODE = "00000"
+DEMO_TOWN_NAME = "Demo KM0"
+DEMO_TOWN_SLUG = "demo-km0"
+# Municipal content (agenda, news) falls back to this population name.
+MALGRAT_CP = "08380"
+MALGRAT_CONTENT_TOWN = "Malgrat de Mar"
+
 DEMO_EMAILS: frozenset[str] = frozenset(
     {
         DEMO_RESIDENT_EMAIL,
@@ -34,6 +42,25 @@ def demo_enabled() -> bool:
 
 def is_demo_email(email: str) -> bool:
     return email.lower().strip() in DEMO_EMAILS
+
+
+def is_demo_postal_code(postal_code: str | None) -> bool:
+    return (postal_code or "").strip() == DEMO_POSTAL_CODE
+
+
+def resolve_public_demo(postal_code: str, requested: bool) -> bool:
+    """Partition for public catalogs.
+
+    - Demo CP (00000) always returns the fake/showcase partition.
+    - Malgrat real (08380) never returns fake via the public API.
+    - Other CPs keep the caller's ``demo`` flag (tests / future towns).
+    """
+    cp = postal_code.strip()
+    if cp == DEMO_POSTAL_CODE:
+        return True
+    if cp == MALGRAT_CP:
+        return False
+    return requested
 
 
 def fake_match(user_is_fake: bool):

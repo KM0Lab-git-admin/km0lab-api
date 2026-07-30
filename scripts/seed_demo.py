@@ -1,6 +1,7 @@
-"""Seed / refresh demo users + fake Malgrat content.
+"""Seed / refresh demo users + fake Demo KM0 content.
 
-Idempotent: safe to re-run. Requires Malgrat town + CP 08380 (scripts.seed).
+Idempotent: safe to re-run. Requires Demo town + CP 00000 (scripts.seed
+ensure_demo_town) and ideally Malgrat for municipal fallback context.
 
 Preserves reward_media and admin-created rewards. Catalog [DEMO] rewards
 use stable ids and are upserted in place (images stay attached).
@@ -14,6 +15,8 @@ Login (ENVIRONMENT=development|staging only):
   resident@km0lab.com  + 123456
   merchant@km0lab.com  + 123456
   admin@km0lab.com     + 123456
+
+Use app postal code 00000 (Demo KM0). Malgrat 08380 stays real-only.
 """
 
 from __future__ import annotations
@@ -33,9 +36,11 @@ from app.db import SessionLocal
 from app.demo import (
     DEMO_ADMIN_EMAIL,
     DEMO_MERCHANT_EMAIL,
+    DEMO_POSTAL_CODE,
     DEMO_RESIDENT_EMAIL,
 )
 from app.models import (
+    PointAction,
     Promotion,
     Redemption,
     RedemptionEvent,
@@ -51,10 +56,11 @@ from app.roles import flags_from_roles
 from app.schemas.opening_hours import OpeningHours
 from app.services.points import apply_points
 from app.services.shop_qr import ensure_shop_qr
+from app.services.towns import ensure_demo_town, resolve_malgrat_town
 from app.utils.slug import slugify, split_full_name
 
 settings = get_settings()
-MALGRAT_CP = "08380"
+# Showcase catalog lives under Demo KM0 (CP 00000), not Malgrat real.
 
 # Extra fake residents for admin stats (not login accounts).
 FAKE_RESIDENTS = [
@@ -761,15 +767,11 @@ def _hours_for(spec: dict) -> dict:
     return week.model_dump()
 
 
-async def _malgrat(db) -> Town:
-    town = (
-        await db.execute(select(Town).where(Town.name == "Malgrat de Mar"))
-    ).scalars().first()
-    if not town:
-        raise RuntimeError("Malgrat de Mar not found — run python -m scripts.seed first")
-    cp = await db.get(TownPostalCode, MALGRAT_CP)
+async def _demo_town(db) -> Town:
+    town = await ensure_demo_town(db)
+    cp = await db.get(TownPostalCode, DEMO_POSTAL_CODE)
     if not cp or cp.town_id != town.id:
-        raise RuntimeError(f"Postal code {MALGRAT_CP} missing for Malgrat")
+        raise RuntimeError(f"Postal code {DEMO_POSTAL_CODE} missing for Demo KM0")
     return town
 
 
@@ -860,7 +862,7 @@ async def _create_shop(
         contact_email=f"demo+{slugify(spec['name'])}@km0lab.com",
         visit_points=spec.get("visit_points", 10),
         address=spec.get("address"),
-        postal_code=MALGRAT_CP,
+        postal_code=DEMO_POSTAL_CODE,
         phone=spec.get("phone"),
         website=spec.get("website"),
         description=spec.get("description"),
@@ -1272,8 +1274,30 @@ async def _seed_fake_redemptions(
 
 async def seed_demo() -> None:
     async with SessionLocal() as db:
-        town = await _malgrat(db)
+        town = await _demo_town(db)
         await _purge_fake(db)
+
+        # Drop leftover fake catalog on Malgrat so 08380 stays real-only.
+        malgrat = await resolve_malgrat_town(db)
+        if malgrat is not None and malgrat.id != town.id:
+            await db.execute(
+                delete(PointAction).where(
+                    PointAction.town_id == malgrat.id,
+                    PointAction.is_fake.is_(True),
+                )
+            )
+            # Re-home leftover fake rewards still pointing at Malgrat.
+            leftover_rewards = (
+                await db.execute(
+                    select(Reward).where(
+                        Reward.town_id == malgrat.id,
+                        Reward.is_fake.is_(True),
+                    )
+                )
+            ).scalars().all()
+            for reward in leftover_rewards:
+                reward.town_id = town.id
+            await db.flush()
 
         shops: list[Shop] = []
         shop_categories: list[str] = []
@@ -1287,7 +1311,7 @@ async def seed_demo() -> None:
                 )
             for i, spec in enumerate(specs[:2]):
                 # Keep stable QR on the primary demo merchant shop.
-                qr = "DEMO-MALGRAT-QR" if category == "bakery" and i == 0 else None
+                qr = "DEMO-KM0-QR" if category == "bakery" and i == 0 else None
                 shop = await _create_shop(
                     db,
                     town_id=town.id,
@@ -1322,7 +1346,7 @@ async def seed_demo() -> None:
             slug="demo-admin",
             first_name="Demo",
             last_name="Admin",
-            postal_code=MALGRAT_CP,
+            postal_code=DEMO_POSTAL_CODE,
             is_fake=True,
             points=0,
             **flags_from_roles(["resident", "admin"]),
@@ -1333,7 +1357,7 @@ async def seed_demo() -> None:
             slug="demo-merchant",
             first_name="Demo",
             last_name="Merchant",
-            postal_code=MALGRAT_CP,
+            postal_code=DEMO_POSTAL_CODE,
             shop_id=merchant_shop.id,
             is_fake=True,
             points=0,
@@ -1345,7 +1369,7 @@ async def seed_demo() -> None:
             slug="demo-resident",
             first_name="Demo",
             last_name="Resident",
-            postal_code=MALGRAT_CP,
+            postal_code=DEMO_POSTAL_CODE,
             is_fake=True,
             points=0,
             **flags_from_roles(["resident"]),
@@ -1379,7 +1403,7 @@ async def seed_demo() -> None:
                 slug=slugify(name),
                 first_name=first,
                 last_name=last,
-                postal_code=MALGRAT_CP,
+                postal_code=DEMO_POSTAL_CODE,
                 is_fake=True,
                 contact_shared=True,
                 points=0,
@@ -1407,24 +1431,25 @@ async def seed_demo() -> None:
 
         await db.commit()
         n_cats = len(DEFAULT_SHOP_CATEGORIES)
-        print("Demo seed OK (Malgrat fake partition)")
-        print(f"  {len(shops)} fake shops ({n_cats} categories × 2) + QR PNG")
+        print(f"Demo seed OK ({town.name} / CP {DEMO_POSTAL_CODE})")
+        print(f"  {len(shops)} fake shops ({n_cats} categories x 2) + QR PNG")
         print(f"  {promo_count} fake promotions (2 per shop)")
         print(f"  {action_count} fake point actions (demo admin catalog)")
-        print(f"  {reward_count} fake rewards (≥2 per type + bonos 5/10/20/50€)")
+        print(f"  {reward_count} fake rewards (2+ per type + bonos 5/10/20/50 EUR)")
         print(
-            f"  {redemption_count} fake redemptions (vals + lliuraments, "
-            f"tots els estats) + {payment_count} shop payments"
+            f"  {redemption_count} fake redemptions + {payment_count} shop payments"
         )
         print(
             f"  Fleca pending codes (Validar vals): "
             f"{' / '.join(fleca_codes)}"
         )
-        print(f"  {DEMO_RESIDENT_EMAIL} / 123456  → resident")
-        print(f"  {DEMO_MERCHANT_EMAIL} / 123456  → merchant+resident (Fleca del Port)")
-        print(f"  {DEMO_ADMIN_EMAIL} / 123456     → admin+resident")
+        print(f"  {DEMO_RESIDENT_EMAIL} / 123456  -> resident")
+        print(f"  {DEMO_MERCHANT_EMAIL} / 123456  -> merchant+resident")
+        print(f"  {DEMO_ADMIN_EMAIL} / 123456     -> admin+resident")
         print(f"  + {len(FAKE_RESIDENTS)} fake residents for admin stats")
-        print("  QR demo shop: DEMO-MALGRAT-QR")
+        print("  QR demo shop: DEMO-KM0-QR")
+        print(f"  Demo postal code: {DEMO_POSTAL_CODE} ({town.name})")
+        print("  Malgrat 08380 stays real-only (municipal fallback for agenda/news)")
 
 
 if __name__ == "__main__":

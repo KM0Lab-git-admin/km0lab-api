@@ -142,7 +142,7 @@ async def test_public_actions_i18n_resolution(client, db_session):
 async def test_public_actions_unknown_postal(client):
     r = await client.get(
         "/api/v1/actions/public",
-        params={"postal_code": "00000"},
+        params={"postal_code": "99999"},
     )
     assert r.status_code == 404
 
@@ -156,3 +156,27 @@ async def test_public_actions_demo_partition(client, db_session):
     )
     assert r.status_code == 200
     assert {a["type"] for a in r.json()} == {"web_visit"}
+
+
+@pytest.mark.asyncio
+async def test_public_actions_demo_cp_forces_fake(client, db_session):
+    """CP 00000 always serves the fake partition (even without demo=true)."""
+    await _town_with_actions(db_session, postal_code="00000", name="Demo KM0")
+    r = await client.get(
+        "/api/v1/actions/public",
+        params={"postal_code": "00000", "visible_home": True},
+    )
+    assert r.status_code == 200
+    assert {a["type"] for a in r.json()} == {"web_visit"}
+
+
+@pytest.mark.asyncio
+async def test_public_actions_malgrat_never_fake(client, db_session):
+    """CP 08380 never serves fake via public API, even with demo=true."""
+    await _town_with_actions(db_session, postal_code="08380", name="Malgrat de Mar")
+    r = await client.get(
+        "/api/v1/actions/public",
+        params={"postal_code": "08380", "demo": True, "visible_home": True},
+    )
+    assert r.status_code == 200
+    assert {a["type"] for a in r.json()} == {"birthday", "custom"}

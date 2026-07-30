@@ -7,6 +7,7 @@ from sqlalchemy.orm import selectinload
 
 from app.catalog.i18n import DEFAULT_LANG, normalize_lang, resolve_i18n
 from app.db import get_db
+from app.demo import resolve_public_demo
 from app.deps import get_current_user, require_admin
 from app.models import Redemption, RedemptionEvent, Reward, RewardShop, Town, User
 from app.schemas import RewardCreate, RewardOut, RewardUpdate
@@ -149,6 +150,7 @@ async def list_rewards_public(
     town = await db.get(Town, postal.town_id)
     fallback = (town.default_lang if town else DEFAULT_LANG) or DEFAULT_LANG
     resolved = normalize_lang(lang) if lang else fallback
+    use_demo = resolve_public_demo(postal.postal_code, demo)
 
     rows = (
         await db.execute(
@@ -156,7 +158,7 @@ async def list_rewards_public(
             .options(selectinload(Reward.shops), selectinload(Reward.media))
             .where(
                 Reward.town_id == postal.town_id,
-                Reward.is_fake.is_(demo),
+                Reward.is_fake.is_(use_demo),
                 Reward.status == "active",
             )
             .order_by(Reward.created_at.desc())

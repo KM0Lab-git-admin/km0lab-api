@@ -15,6 +15,7 @@ from app.catalog.action_labels import (
 )
 from app.catalog.i18n import normalize_lang, resolve_i18n
 from app.db import get_db
+from app.demo import resolve_public_demo
 from app.deps import require_admin
 from app.models import PointAction, Town, User
 from app.schemas import PointActionCreate, PointActionOut, PointActionUpdate
@@ -150,12 +151,13 @@ async def list_actions_public(
     town = await db.get(Town, postal.town_id)
     fallback_lang = (town.default_lang if town else DEFAULT_LANG) or DEFAULT_LANG
     resolved_lang = normalize_lang(lang) if lang else fallback_lang
+    use_demo = resolve_public_demo(postal.postal_code, demo)
 
     stmt = (
         select(PointAction)
         .where(
             PointAction.town_id == postal.town_id,
-            PointAction.is_fake.is_(demo),
+            PointAction.is_fake.is_(use_demo),
             PointAction.active.is_(True),
         )
         .order_by(PointAction.created_at.desc())

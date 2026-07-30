@@ -6,7 +6,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models import TownPostalCode, User
+from app.demo import (
+    DEMO_POSTAL_CODE,
+    DEMO_TOWN_NAME,
+    DEMO_TOWN_SLUG,
+    MALGRAT_CONTENT_TOWN,
+    MALGRAT_CP,
+    is_demo_postal_code,
+)
+from app.models import Town, TownPostalCode, User
 
 
 async def get_postal_code(db: AsyncSession, postal_code: str) -> TownPostalCode | None:
@@ -67,4 +75,63 @@ async def load_user_with_town(db: AsyncSession, user_id: str) -> User | None:
             )
             .where(User.id == user_id)
         )
+    ).scalars().first()
+
+
+async def get_town_by_slug(db: AsyncSession, slug: str) -> Town | None:
+    return (
+        await db.execute(select(Town).where(Town.slug == slug))
+    ).scalars().first()
+
+
+async def ensure_demo_town(db: AsyncSession) -> Town:
+    """Idempotent: Demo KM0 town + CP 00000 for product demos."""
+    existing_cp = await get_postal_code(db, DEMO_POSTAL_CODE)
+    if existing_cp is not None:
+        town = await db.get(Town, existing_cp.town_id)
+        if town is not None:
+            return town
+
+    town = (
+        await db.execute(select(Town).where(Town.slug == DEMO_TOWN_SLUG))
+    ).scalars().first()
+    if town is None:
+        town = Town(
+            name=DEMO_TOWN_NAME,
+            slug=DEMO_TOWN_SLUG,
+            entity_name="KM0 LAB Demo",
+            entity_type="private",
+            contact_email="demo@km0lab.com",
+            manager_name="Demo KM0",
+            default_lang="ca",
+        )
+        db.add(town)
+        await db.flush()
+
+    db.add(
+        TownPostalCode(
+            postal_code=DEMO_POSTAL_CODE,
+            town_id=town.id,
+            is_primary=True,
+        )
+    )
+    await db.flush()
+    return town
+
+
+def municipal_content_poblacion(
+    postal_code: str | None, town_name: str | None
+) -> str:
+    """Population name for agenda/news APIs (Demo falls back to Malgrat)."""
+    if is_demo_postal_code(postal_code):
+        return MALGRAT_CONTENT_TOWN
+    return (town_name or MALGRAT_CONTENT_TOWN).strip() or MALGRAT_CONTENT_TOWN
+
+
+async def resolve_malgrat_town(db: AsyncSession) -> Town | None:
+    cp = await get_postal_code(db, MALGRAT_CP)
+    if cp is not None:
+        return await db.get(Town, cp.town_id)
+    return (
+        await db.execute(select(Town).where(Town.name == MALGRAT_CONTENT_TOWN))
     ).scalars().first()

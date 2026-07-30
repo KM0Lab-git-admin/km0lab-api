@@ -26,6 +26,7 @@ from app.models import (
 from app.catalog.point_actions import ensure_town_point_actions
 from app.catalog.shop_categories import DEFAULT_SHOP_CATEGORIES
 from app.services.points import apply_points
+from app.services.towns import ensure_demo_town
 from app.utils.slug import slugify, split_full_name
 
 
@@ -78,14 +79,20 @@ async def seed() -> None:
                 db.add(ShopCategory(slug=slug, sort_order=order, active=True))
         await db.flush()
 
-        existing = (await db.execute(select(Town))).scalars().first()
-        if existing:
+        demo_town = await ensure_demo_town(db)
+        print(f"Demo town ensured: {demo_town.name} (CP 00000)")
+
+        # More than just Demo → pilot towns already seeded.
+        town_count = len((await db.execute(select(Town))).scalars().all())
+        if town_count > 1:
             towns = (await db.execute(select(Town))).scalars().all()
             for town in towns:
+                if town.slug == demo_town.slug:
+                    continue
                 n = await ensure_town_point_actions(db, town.id, is_fake=False)
                 print(f"Real point actions reset for {town.name}: {n}")
             await db.commit()
-            print("Seed skipped: towns already present (categories + actions ensured).")
+            print("Seed skipped: towns already present (categories + demo + actions ensured).")
             return
 
         for spec in TOWNS:

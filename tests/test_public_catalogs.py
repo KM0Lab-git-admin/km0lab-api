@@ -136,7 +136,7 @@ async def test_public_rewards_by_postal_and_lang(client, db_session):
 
     unknown = await client.get(
         "/api/v1/rewards/public",
-        params={"postal_code": "00000"},
+        params={"postal_code": "99999"},
     )
     assert unknown.status_code == 404
 
@@ -160,6 +160,24 @@ async def test_public_rewards_by_postal_and_lang(client, db_session):
         params={"postal_code": "08401", "demo": True},
     )
     assert [r["name"] for r in demo.json()] == ["Demo Reward"]
+
+
+@pytest.mark.asyncio
+async def test_public_rewards_demo_cp_and_malgrat_guard(client, db_session):
+    await _seed_town_catalog(db_session, postal_code="00000", name="Demo KM0")
+    demo_cp = await client.get(
+        "/api/v1/rewards/public",
+        params={"postal_code": "00000"},
+    )
+    assert demo_cp.status_code == 200
+    assert [r["name"] for r in demo_cp.json()] == ["Demo Reward"]
+
+    await _seed_town_catalog(db_session, postal_code="08380", name="Malgrat de Mar")
+    malgrat = await client.get(
+        "/api/v1/rewards/public",
+        params={"postal_code": "08380", "demo": True},
+    )
+    assert [r["name"] for r in malgrat.json()] == ["Premi CA"]
 
 
 @pytest.mark.asyncio

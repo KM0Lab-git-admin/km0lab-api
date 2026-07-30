@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.catalog.i18n import DEFAULT_LANG, normalize_lang, resolve_i18n
 from app.db import get_db
+from app.demo import resolve_public_demo
 from app.deps import require_merchant
 from app.models import Promotion, Shop, Town, User
 from app.schemas import PromotionCreate, PromotionOut, PromotionUpdate
@@ -144,6 +145,7 @@ async def list_promotions_public(
     town = await db.get(Town, postal.town_id)
     fallback = (town.default_lang if town else DEFAULT_LANG) or DEFAULT_LANG
     resolved = normalize_lang(lang) if lang else fallback
+    use_demo = resolve_public_demo(postal.postal_code, demo)
 
     rows = (
         await db.execute(
@@ -152,9 +154,9 @@ async def list_promotions_public(
             .where(
                 Shop.town_id == postal.town_id,
                 Shop.status == "active",
-                Shop.is_fake.is_(demo),
+                Shop.is_fake.is_(use_demo),
                 Promotion.active.is_(True),
-                Promotion.is_fake.is_(demo),
+                Promotion.is_fake.is_(use_demo),
             )
             .order_by(Promotion.created_at.desc())
         )

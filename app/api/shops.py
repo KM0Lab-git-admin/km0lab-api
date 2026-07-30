@@ -14,6 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
+from app.demo import resolve_public_demo
 from app.deps import (
     assert_shop_scope,
     assert_town_scope,
@@ -156,13 +157,14 @@ async def list_shops_public(
         )
     town = await db.get(Town, postal.town_id)
     fallback = (town.default_lang if town else DEFAULT_LANG) or DEFAULT_LANG
+    use_demo = resolve_public_demo(postal.postal_code, demo)
 
     rows = (
         await db.execute(
             select(Shop)
             .where(
                 Shop.town_id == postal.town_id,
-                Shop.is_fake.is_(demo),
+                Shop.is_fake.is_(use_demo),
                 Shop.status == "active",
             )
             .order_by(Shop.created_at.desc())
