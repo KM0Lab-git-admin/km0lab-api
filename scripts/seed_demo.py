@@ -2,6 +2,9 @@
 
 Idempotent: safe to re-run. Requires Malgrat town + CP 08380 (scripts.seed).
 
+Preserves reward_media and admin-created rewards. Catalog [DEMO] rewards
+use stable ids and are upserted in place (images stay attached).
+
 Creates 2 complete fake shops per category (with QR PNG), demo users,
 promotions/reward on the merchant's shop, and extra fake residents.
 
@@ -33,13 +36,10 @@ from app.demo import (
     DEMO_RESIDENT_EMAIL,
 )
 from app.models import (
-    PointAction,
     Promotion,
     Redemption,
     RedemptionEvent,
     Reward,
-    RewardMedia,
-    RewardShop,
     Shop,
     ShopMedia,
     ShopPayment,
@@ -774,7 +774,12 @@ async def _malgrat(db) -> Town:
 
 
 async def _purge_fake(db) -> None:
-    """Remove previous fake catalog (keep real rows). Demo users recreated below."""
+    """Reset demo ledger/users/shops; never wipe reward_media or admin rewards.
+
+    Catalog [DEMO] rewards are upserted later with stable ids (see
+    seed_fake_rewards). Admin-created fake rewards and any uploaded
+    reward_media rows are left untouched.
+    """
     from app.models import PointsTransaction, QrScan
 
     fake_user_ids = (
@@ -783,9 +788,7 @@ async def _purge_fake(db) -> None:
     fake_shops = (
         await db.execute(select(Shop.id).where(Shop.is_fake.is_(True)))
     ).scalars().all()
-    fake_rewards = (
-        await db.execute(select(Reward.id).where(Reward.is_fake.is_(True)))
-    ).scalars().all()
+    # Only purge seeded catalog redemptions/ledger — not reward rows/media.
     fake_redemptions = (
         await db.execute(
             select(Redemption.id).where(
@@ -823,16 +826,9 @@ async def _purge_fake(db) -> None:
             )
         )
     )
-    if fake_rewards:
-        await db.execute(
-            delete(RewardMedia).where(RewardMedia.reward_id.in_(fake_rewards))
-        )
-        await db.execute(
-            delete(RewardShop).where(RewardShop.reward_id.in_(fake_rewards))
-        )
-        await db.execute(delete(Reward).where(Reward.id.in_(fake_rewards)))
+    # Do NOT delete Reward / RewardMedia / RewardShop / PointAction here.
+    # Catalogs are upserted in place so BO config (visible_home, points, media) persists.
     await db.execute(delete(Promotion).where(Promotion.is_fake.is_(True)))
-    await db.execute(delete(PointAction).where(PointAction.is_fake.is_(True)))
     if fake_user_ids:
         for u in (
             await db.execute(select(User).where(User.id.in_(fake_user_ids)))

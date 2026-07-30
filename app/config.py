@@ -42,13 +42,18 @@ class Settings(BaseSettings):
     # CORS: orígenes del frontend, separados por coma
     cors_origins: str = (
         "http://localhost:5173,http://localhost:5174,http://localhost:3000,"
-        "http://localhost:8080,"
+        "http://localhost:8080,http://localhost:8081,http://localhost:8082,"
         "http://127.0.0.1:5173,http://127.0.0.1:5174,http://127.0.0.1:3000,"
-        "http://127.0.0.1:8080"
+        "http://127.0.0.1:8080,http://127.0.0.1:8081,http://127.0.0.1:8082"
     )
 
     # Deep-link encoded in shop QR PNGs (app extracts ?c=token)
     qr_scan_base_url: str = "https://app.km0lab.com/scan"
+
+    # OpenAI — used to auto-fill missing i18n languages on save.
+    # If empty, the API copies the source text into empty languages.
+    openai_api_key: str = ""
+    openai_translate_model: str = "gpt-4o-mini"
 
     @property
     def database_url(self) -> str:

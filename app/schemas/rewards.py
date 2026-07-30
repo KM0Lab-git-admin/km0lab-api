@@ -10,6 +10,10 @@ class RewardOut(BaseModel):
     town_id: str
     name: str
     description: str
+    name_i18n: dict | None = None
+    description_i18n: dict | None = None
+    conditions_i18n: dict | None = None
+    i18n_source_lang: str = "ca"
     image_url: str | None
     has_image: bool = False
     type: str
@@ -29,8 +33,12 @@ class RewardOut(BaseModel):
 
 
 class RewardCreate(BaseModel):
-    name: str = Field(max_length=200)
-    description: str = ""
+    name: str | None = Field(default=None, max_length=200)
+    description: str | None = ""
+    name_i18n: dict | None = None
+    description_i18n: dict | None = None
+    conditions_i18n: dict | None = None
+    i18n_source_lang: str | None = Field(default=None, pattern="^(ca|es|en)$")
     image_url: str | None = None  # ignored; use PUT /rewards/{id}/media
     type: str = Field(pattern=REWARD_TYPE_PATTERN)
     points_required: int = Field(ge=0)
@@ -46,6 +54,10 @@ class RewardCreate(BaseModel):
 class RewardUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
+    name_i18n: dict | None = None
+    description_i18n: dict | None = None
+    conditions_i18n: dict | None = None
+    i18n_source_lang: str | None = Field(default=None, pattern="^(ca|es|en)$")
     image_url: str | None = None  # ignored; use PUT/DELETE /rewards/{id}/media
     type: str | None = Field(default=None, pattern=REWARD_TYPE_PATTERN)
     points_required: int | None = Field(default=None, ge=0)

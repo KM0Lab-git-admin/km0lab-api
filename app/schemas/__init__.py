@@ -7,6 +7,7 @@ from app.schemas.towns import (
     TownUpdate,
     TownPostalCodeOut,
     TownPostalCodeCreate,
+    TownMediaOut,
 )
 from app.schemas.shops import (
     ShopCreate,
@@ -17,7 +18,7 @@ from app.schemas.shops import (
     QrOut,
 )
 from app.schemas.opening_hours import DayHours, OpeningHours
-from app.schemas.shop_categories import ShopCategoryOut
+from app.schemas.shop_categories import ShopCategoryOut, ShopCategoryUpdate
 from app.schemas.promotions import PromotionCreate, PromotionOut, PromotionUpdate
 from app.schemas.actions import PointActionCreate, PointActionOut, PointActionUpdate
 from app.schemas.rewards import RewardCreate, RewardMediaOut, RewardOut, RewardUpdate
@@ -45,6 +46,7 @@ __all__ = [
     "TownUpdate",
     "TownPostalCodeOut",
     "TownPostalCodeCreate",
+    "TownMediaOut",
     "ShopCreate",
     "ShopOut",
     "ShopUpdate",
@@ -54,6 +56,7 @@ __all__ = [
     "DayHours",
     "OpeningHours",
     "ShopCategoryOut",
+    "ShopCategoryUpdate",
     "PromotionCreate",
     "PromotionOut",
     "PromotionUpdate",

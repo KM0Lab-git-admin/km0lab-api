@@ -10,6 +10,11 @@ class PromotionOut(BaseModel):
     label: str
     title: str
     detail: str
+    label_i18n: dict | None = None
+    title_i18n: dict | None = None
+    detail_i18n: dict | None = None
+    conditions_i18n: dict | None = None
+    i18n_source_lang: str = "ca"
     value: str | None
     min_purchase: str | None
     valid_from: datetime | None
@@ -26,8 +31,13 @@ class PromotionOut(BaseModel):
 class PromotionCreate(BaseModel):
     type: str = Field(pattern="^(discount|two_for_one|gift|special_price)$")
     label: str | None = Field(default=None, max_length=80)
-    title: str = Field(max_length=200)
-    detail: str = ""
+    title: str | None = Field(default=None, max_length=200)
+    detail: str | None = ""
+    label_i18n: dict | None = None
+    title_i18n: dict | None = None
+    detail_i18n: dict | None = None
+    conditions_i18n: dict | None = None
+    i18n_source_lang: str | None = Field(default=None, pattern="^(ca|es|en)$")
     value: str | None = None
     min_purchase: str | None = None
     valid_from: datetime | None = None
@@ -43,6 +53,11 @@ class PromotionUpdate(BaseModel):
     label: str | None = None
     title: str | None = None
     detail: str | None = None
+    label_i18n: dict | None = None
+    title_i18n: dict | None = None
+    detail_i18n: dict | None = None
+    conditions_i18n: dict | None = None
+    i18n_source_lang: str | None = Field(default=None, pattern="^(ca|es|en)$")
     value: str | None = None
     min_purchase: str | None = None
     valid_from: datetime | None = None

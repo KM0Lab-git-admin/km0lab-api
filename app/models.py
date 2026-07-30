@@ -50,6 +50,10 @@ class Town(Base):
     contact_email: Mapped[str] = mapped_column(String(255), default="")
     manager_name: Mapped[str] = mapped_column(String(120), default="")
     logo_url: Mapped[str | None] = mapped_column(String(512), default=None)
+    # BO config · Configuració
+    points_per_euro: Mapped[int] = mapped_column(Integer, default=200)
+    default_visit_points: Mapped[int] = mapped_column(Integer, default=10)
+    default_lang: Mapped[str] = mapped_column(String(5), default="ca")  # ca|es|en
     expiry_months: Mapped[int | None] = mapped_column(Integer, default=None)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
@@ -61,6 +65,41 @@ class Town(Base):
     postal_codes: Mapped[list[TownPostalCode]] = relationship(
         "TownPostalCode", back_populates="town", cascade="all, delete-orphan"
     )
+    media: Mapped[list["TownMedia"]] = relationship(
+        "TownMedia",
+        back_populates="town",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
+
+class TownMedia(Base):
+    """Binary brand assets for a town (logo)."""
+
+    __tablename__ = "town_media"
+    __table_args__ = (
+        UniqueConstraint("town_id", "kind", name="uq_town_media_kind"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    town_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("towns.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(20))  # logo
+    content_type: Mapped[str] = mapped_column(String(64))
+    data: Mapped[bytes] = mapped_column(
+        LargeBinary().with_variant(LONGBLOB(), "mysql"),
+        nullable=False,
+    )
+    byte_size: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    town: Mapped["Town"] = relationship("Town", back_populates="media")
 
 
 class TownPostalCode(Base):
@@ -184,14 +223,19 @@ class OtpCode(Base):
 
 
 class ShopCategory(Base):
-    """Catalog of shop categories. Labels live in front/backoffice i18n
-    keyed by slug (e.g. shopCategories.bakery)."""
+    """Catalog of shop categories. Labels live in label_i18n (ca/es/en).
+
+    Legacy front/BO i18n keys (shopCategories.{slug}) remain as fallback
+    when label_i18n is null.
+    """
 
     __tablename__ = "shop_categories"
 
     slug: Mapped[str] = mapped_column(String(40), primary_key=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    label_i18n: Mapped[dict | None] = mapped_column(JSON, default=None)
+    i18n_source_lang: Mapped[str] = mapped_column(String(5), default="ca")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
@@ -218,6 +262,8 @@ class Shop(Base):
     phone: Mapped[str | None] = mapped_column(String(40), default=None)
     website: Mapped[str | None] = mapped_column(String(255), default=None)
     description: Mapped[str | None] = mapped_column(Text, default=None)
+    description_i18n: Mapped[dict | None] = mapped_column(JSON, default=None)
+    i18n_source_lang: Mapped[str] = mapped_column(String(5), default="ca")
     # Weekly schedule JSON — see app.schemas.opening_hours.OpeningHours
     # {"monday": {"closed": false, "opens": "07:00", "closes": "20:00"}, ...}
     opening_hours: Mapped[dict | None] = mapped_column(JSON, default=None)
@@ -288,6 +334,11 @@ class Promotion(Base):
     valid_until: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     conditions: Mapped[str | None] = mapped_column(Text, default=None)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    label_i18n: Mapped[dict | None] = mapped_column(JSON, default=None)
+    title_i18n: Mapped[dict | None] = mapped_column(JSON, default=None)
+    detail_i18n: Mapped[dict | None] = mapped_column(JSON, default=None)
+    conditions_i18n: Mapped[dict | None] = mapped_column(JSON, default=None)
+    i18n_source_lang: Mapped[str] = mapped_column(String(5), default="ca")
     is_fake: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
@@ -309,7 +360,7 @@ class PointAction(Base):
     )
     type: Mapped[str] = mapped_column(
         String(30)
-    )  # signup | birthday | qr_scan | web_visit | web_signup | event | custom
+    )  # signup | birthday | qr_scan | first_scan | web_visit | web_signup | event | custom
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str] = mapped_column(Text, default="")
     points: Mapped[int] = mapped_column(Integer, default=0)
@@ -319,6 +370,13 @@ class PointAction(Base):
     valid_until: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     conditions: Mapped[str | None] = mapped_column(Text, default=None)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Featured on the residents app home ("Cómo ganar puntos hoy").
+    visible_home: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    # Trilingual labels for custom actions; fixed types use the catalog.
+    name_i18n: Mapped[dict | None] = mapped_column(JSON, default=None)
+    description_i18n: Mapped[dict | None] = mapped_column(JSON, default=None)
+    conditions_i18n: Mapped[dict | None] = mapped_column(JSON, default=None)
+    i18n_source_lang: Mapped[str] = mapped_column(String(5), default="ca")
     url: Mapped[str | None] = mapped_column(String(512), default=None)
     event_id: Mapped[str | None] = mapped_column(String(64), default=None)
     # Days until the same user can earn points again from the same shop QR.
@@ -351,6 +409,10 @@ class Reward(Base):
     valid_from: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     valid_until: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     conditions: Mapped[str | None] = mapped_column(Text, default=None)
+    name_i18n: Mapped[dict | None] = mapped_column(JSON, default=None)
+    description_i18n: Mapped[dict | None] = mapped_column(JSON, default=None)
+    conditions_i18n: Mapped[dict | None] = mapped_column(JSON, default=None)
+    i18n_source_lang: Mapped[str] = mapped_column(String(5), default="ca")
     status: Mapped[str] = mapped_column(
         String(20), default="active", index=True
     )  # active | inactive | sold_out

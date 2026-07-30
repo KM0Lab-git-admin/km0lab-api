@@ -21,9 +21,11 @@ from app.deps import (
     require_admin,
     require_merchant,
 )
-from app.models import QrScan, Shop, User
+from app.catalog.i18n import DEFAULT_LANG, normalize_lang, resolve_i18n
+from app.models import QrScan, Shop, Town, User
 from app.schemas import QrOut, ShopCreate, ShopOut, ShopProfileUpdate, ShopUpdate
 from app.schemas.shops import ShopMediaOut
+from app.services.i18n_fields import apply_text_i18n
 from app.services.shop_categories import resolve_category_slugs
 from app.services.shop_media import (
     delete_shop_media,
@@ -37,11 +39,22 @@ from app.services.shop_qr import build_scan_url, ensure_shop_qr, qr_png_url
 router = APIRouter(prefix="/shops", tags=["shops"])
 
 
-async def _shop_out(db: AsyncSession, shop: Shop) -> ShopOut:
+async def _shop_out(
+    db: AsyncSession,
+    shop: Shop,
+    *,
+    lang: str | None = None,
+    fallback_lang: str | None = None,
+) -> ShopOut:
     kinds = await media_kinds_present(db, shop.id)
     has_logo = "logo" in kinds
     has_hero = "hero" in kinds
     data = ShopOut.model_validate(shop)
+    fb = fallback_lang or DEFAULT_LANG
+    resolved = normalize_lang(lang) if lang else fb
+    data.description = resolve_i18n(
+        shop.description_i18n, resolved, fb, legacy=shop.description
+    )
     return data.model_copy(
         update={
             "has_logo": has_logo,
@@ -54,6 +67,33 @@ async def _shop_out(db: AsyncSession, shop: Shop) -> ShopOut:
             else shop.hero_url,
         }
     )
+
+
+async def _default_lang_for_shop(db: AsyncSession, shop: Shop) -> str:
+    town = await db.get(Town, shop.town_id)
+    return (town.default_lang if town else DEFAULT_LANG) or DEFAULT_LANG
+
+
+async def _apply_shop_description_i18n(
+    shop: Shop,
+    *,
+    description: str | None,
+    description_i18n: dict | None,
+    i18n_source_lang: str | None,
+    default_lang: str,
+) -> None:
+    src = i18n_source_lang or shop.i18n_source_lang or default_lang
+    shop.i18n_source_lang = normalize_lang(src)
+    filled, plain = await apply_text_i18n(
+        payload_i18n=description_i18n,
+        payload_plain=description,
+        existing_i18n=shop.description_i18n,
+        existing_plain=shop.description,
+        source_lang=src,
+        default_lang=default_lang,
+    )
+    shop.description_i18n = filled
+    shop.description = plain or None
 
 
 async def _qr_out(db: AsyncSession, shop: Shop, *, is_fake: bool) -> QrOut:
@@ -88,6 +128,7 @@ async def _qr_out(db: AsyncSession, shop: Shop, *, is_fake: bool) -> QrOut:
 async def list_shops(
     status_filter: str | None = Query(default=None, alias="status"),
     q: str | None = None,
+    lang: str | None = Query(default=None),
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -103,7 +144,9 @@ async def list_shops(
         stmt = stmt.where(Shop.name.ilike(f"%{q}%"))
     stmt = stmt.order_by(Shop.created_at.desc())
     rows = (await db.execute(stmt)).scalars().all()
-    return [await _shop_out(db, s) for s in rows]
+    town = await db.get(Town, user.town_id)
+    fallback = (town.default_lang if town else DEFAULT_LANG) or DEFAULT_LANG
+    return [await _shop_out(db, s, lang=lang, fallback_lang=fallback) for s in rows]
 
 
 @router.post("", response_model=ShopOut, status_code=status.HTTP_201_CREATED)
@@ -115,13 +158,20 @@ async def create_shop(
     if not user.town_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Admin has no town")
     categories = await resolve_category_slugs(db, payload.categories)
+    town = await db.get(Town, user.town_id)
+    default_lang = (town.default_lang if town else DEFAULT_LANG) or DEFAULT_LANG
+    visit_points = (
+        payload.visit_points
+        if payload.visit_points is not None
+        else (town.default_visit_points if town else 10)
+    )
     shop = Shop(
         town_id=user.town_id,
         name=payload.name,
         emoji=payload.emoji,
         categories=categories,
         contact_email=payload.contact_email.lower(),
-        visit_points=payload.visit_points,
+        visit_points=visit_points,
         address=payload.address,
         opening_hours=(
             payload.opening_hours.model_dump() if payload.opening_hours else None
@@ -129,16 +179,25 @@ async def create_shop(
         status="pending",
         is_fake=user.is_fake,
     )
+    if payload.description is not None or payload.description_i18n is not None:
+        await _apply_shop_description_i18n(
+            shop,
+            description=payload.description,
+            description_i18n=payload.description_i18n,
+            i18n_source_lang=payload.i18n_source_lang,
+            default_lang=default_lang,
+        )
     db.add(shop)
     await db.flush()
     await ensure_shop_qr(db, shop)
     await db.commit()
     await db.refresh(shop)
-    return await _shop_out(db, shop)
+    return await _shop_out(db, shop, fallback_lang=default_lang)
 
 
 @router.get("/me", response_model=ShopOut)
 async def get_my_shop(
+    lang: str | None = Query(default=None),
     user: User = Depends(require_merchant),
     db: AsyncSession = Depends(get_db),
 ):
@@ -147,7 +206,8 @@ async def get_my_shop(
     shop = await db.get(Shop, user.shop_id)
     if not shop:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Shop not found")
-    return await _shop_out(db, shop)
+    fallback = await _default_lang_for_shop(db, shop)
+    return await _shop_out(db, shop, lang=lang, fallback_lang=fallback)
 
 
 @router.patch("/me", response_model=ShopOut)
@@ -161,14 +221,26 @@ async def update_my_shop(
     shop = await db.get(Shop, user.shop_id)
     if not shop:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Shop not found")
+    default_lang = await _default_lang_for_shop(db, shop)
     data = payload.model_dump(exclude_unset=True)
     if "categories" in data:
         data["categories"] = await resolve_category_slugs(db, data["categories"])
+    description = data.pop("description", None)
+    description_i18n = data.pop("description_i18n", None)
+    i18n_source_lang = data.pop("i18n_source_lang", None)
     for field, value in data.items():
         setattr(shop, field, value)
+    if any(v is not None for v in (description, description_i18n, i18n_source_lang)):
+        await _apply_shop_description_i18n(
+            shop,
+            description=description,
+            description_i18n=description_i18n,
+            i18n_source_lang=i18n_source_lang or shop.i18n_source_lang,
+            default_lang=default_lang,
+        )
     await db.commit()
     await db.refresh(shop)
-    return await _shop_out(db, shop)
+    return await _shop_out(db, shop, fallback_lang=default_lang)
 
 
 @router.put("/me/media/{kind}", response_model=ShopMediaOut)
@@ -286,6 +358,7 @@ async def download_shop_media(
 @router.get("/{shop_id}", response_model=ShopOut)
 async def get_shop(
     shop_id: str,
+    lang: str | None = Query(default=None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -296,7 +369,8 @@ async def get_shop(
         assert_town_scope(user, shop.town_id)
     elif user.has_role("merchant"):
         assert_shop_scope(user, shop.id)
-    return await _shop_out(db, shop)
+    fallback = await _default_lang_for_shop(db, shop)
+    return await _shop_out(db, shop, lang=lang, fallback_lang=fallback)
 
 
 @router.patch("/{shop_id}", response_model=ShopOut)
@@ -310,11 +384,23 @@ async def update_shop(
     if not shop:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Shop not found")
     assert_town_scope(user, shop.town_id)
+    default_lang = await _default_lang_for_shop(db, shop)
     data = payload.model_dump(exclude_unset=True)
     if "categories" in data:
         data["categories"] = await resolve_category_slugs(db, data["categories"])
+    description = data.pop("description", None)
+    description_i18n = data.pop("description_i18n", None)
+    i18n_source_lang = data.pop("i18n_source_lang", None)
     for field, value in data.items():
         setattr(shop, field, value)
+    if any(v is not None for v in (description, description_i18n, i18n_source_lang)):
+        await _apply_shop_description_i18n(
+            shop,
+            description=description,
+            description_i18n=description_i18n,
+            i18n_source_lang=i18n_source_lang or shop.i18n_source_lang,
+            default_lang=default_lang,
+        )
     await db.commit()
     await db.refresh(shop)
-    return await _shop_out(db, shop)
+    return await _shop_out(db, shop, fallback_lang=default_lang)
