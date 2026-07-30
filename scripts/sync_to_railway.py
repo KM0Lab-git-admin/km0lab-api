@@ -82,8 +82,18 @@ def sync(local: dict, target: dict) -> None:
     print("Escribiendo en Railway (reemplaza tablas existentes)...")
     with connect(target) as dst, dst.cursor() as dcur:
         dcur.execute("SET FOREIGN_KEY_CHECKS=0")
-        for table, create_sql, cols, rows in payloads:
+        # Phase 1: drop every base table on the target (avoids half-applied
+        # CREATE TABLE … already exists when a previous sync aborted mid-loop).
+        remote_tables = [
+            t for t in list_tables(dcur) if t != "alembic_version"
+        ]
+        for table in remote_tables:
             dcur.execute(f"DROP TABLE IF EXISTS `{table}`")
+            print(f"  − drop {table}")
+        dst.commit()
+
+        # Phase 2: create + insert from local dump.
+        for table, create_sql, cols, rows in payloads:
             dcur.execute(create_sql)
             if rows:
                 placeholders = ", ".join(["%s"] * len(cols))
