@@ -225,6 +225,7 @@ class OtpCode(Base):
 class ShopCategory(Base):
     """Catalog of shop categories. Labels live in label_i18n (ca/es/en).
 
+    `emoji` is the representative icon for the category (managed in API/BO).
     Legacy front/BO i18n keys (shopCategories.{slug}) remain as fallback
     when label_i18n is null.
     """
@@ -234,6 +235,7 @@ class ShopCategory(Base):
     slug: Mapped[str] = mapped_column(String(40), primary_key=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    emoji: Mapped[str | None] = mapped_column(String(16), default=None)
     label_i18n: Mapped[dict | None] = mapped_column(JSON, default=None)
     i18n_source_lang: Mapped[str] = mapped_column(String(5), default="ca")
     created_at: Mapped[datetime] = mapped_column(

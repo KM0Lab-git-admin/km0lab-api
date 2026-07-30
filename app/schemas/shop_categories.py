@@ -7,6 +7,7 @@ class ShopCategoryOut(BaseModel):
     slug: str
     sort_order: int
     active: bool
+    emoji: str | None = None
     # Resolved label for the requested lang (public) or default_lang.
     label: str | None = None
     # Full i18n map — exposed to admin/BO; may be omitted on public calls.
@@ -22,3 +23,4 @@ class ShopCategoryUpdate(BaseModel):
     i18n_source_lang: str | None = Field(default=None, pattern="^(ca|es|en)$")
     sort_order: int | None = None
     active: bool | None = None
+    emoji: str | None = Field(default=None, max_length=16)

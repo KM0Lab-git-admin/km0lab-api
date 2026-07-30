@@ -1,7 +1,8 @@
 """Seed demo users + fake Demo KM0 content (insert-only).
 
 Safe to re-run: never deletes or overwrites existing rows (shops, promos,
-rewards, point actions, users, redemptions, i18n, media, BO config).
+rewards, point actions, users, redemptions, i18n, BO config).
+Does not generate logo/hero images — shops stay without media until uploaded.
 Only creates missing demo pieces.
 
 Requires Demo town + CP 00000 (scripts.seed / ensure_demo_town).
@@ -19,12 +20,10 @@ Use app postal code 00000 (Demo KM0). Malgrat 08380 stays real-only.
 from __future__ import annotations
 
 import asyncio
-import io
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
-from PIL import Image, ImageDraw
 from sqlalchemy import select
 
 from app.catalog.point_actions import ensure_town_point_actions
@@ -45,7 +44,6 @@ from app.models import (
     RedemptionEvent,
     Reward,
     Shop,
-    ShopMedia,
     ShopPayment,
     Town,
     TownPostalCode,
@@ -55,7 +53,6 @@ from app.roles import flags_from_roles
 from app.schemas.opening_hours import OpeningHours
 from app.services.action_grants import ACTION_TYPE_QR_SCAN, find_active_action
 from app.services.points import apply_points
-from app.services.shop_media import media_kinds_present
 from app.services.shop_qr import ensure_shop_qr
 from app.services.towns import ensure_demo_town
 from app.utils.slug import slugify, split_full_name
@@ -1359,50 +1356,6 @@ async def _ensure_fake_qr_scans(
     return created
 
 
-def _demo_png(size: tuple[int, int], color: tuple[int, int, int], label: str) -> bytes:
-    """Solid-color PNG with a short label (Pillow via qrcode[pil])."""
-    img = Image.new("RGB", size, color)
-    draw = ImageDraw.Draw(img)
-    text = (label or "KM0")[:18]
-    # Approximate center without depending on a TTF font.
-    tw = len(text) * 6
-    th = 10
-    xy = ((size[0] - tw) // 2, (size[1] - th) // 2)
-    draw.text(xy, text, fill=(255, 255, 255))
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
-
-
-async def _ensure_fake_shop_media(db, shop: Shop) -> int:
-    """Insert-only logo + hero BLOBs for a fake shop. Returns kinds added."""
-    present = await media_kinds_present(db, shop.id)
-    added = 0
-    specs: list[tuple[str, tuple[int, int], tuple[int, int, int]]] = [
-        ("logo", (256, 256), (30, 64, 120)),
-        ("hero", (800, 450), (20, 90, 110)),
-    ]
-    label = (shop.name or "DEMO").replace("[DEMO] ", "")
-    for kind, size, color in specs:
-        if kind in present:
-            continue
-        data = _demo_png(size, color, label if kind == "logo" else f"{label} · hero")
-        db.add(
-            ShopMedia(
-                id=_id(),
-                shop_id=shop.id,
-                kind=kind,
-                content_type="image/png",
-                data=data,
-                byte_size=len(data),
-            )
-        )
-        added += 1
-    if added:
-        await db.flush()
-    return added
-
-
 async def seed_demo() -> None:
     async with SessionLocal() as db:
         town = await _demo_town(db)
@@ -1503,10 +1456,6 @@ async def seed_demo() -> None:
             residents=[resident, *fake_residents],
         )
 
-        media_kinds_added = 0
-        for shop in shops:
-            media_kinds_added += await _ensure_fake_shop_media(db, shop)
-
         existing_fake_redemption = (
             await db.execute(
                 select(Redemption.id).where(
@@ -1560,10 +1509,6 @@ async def seed_demo() -> None:
             print(f"  qr_scans added: {qr_scans_added}")
         else:
             print("  qr_scans: skipped (already present)")
-        if media_kinds_added:
-            print(f"  shop media (logo/hero) added: {media_kinds_added}")
-        else:
-            print("  shop media: skipped (already present)")
         print("  QR demo shop: DEMO-KM0-QR")
         print(f"  Demo postal code: {DEMO_POSTAL_CODE} ({town.name})")
         print("  No deletes / no overwrites (BO i18n and config preserved)")

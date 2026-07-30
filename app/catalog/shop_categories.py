@@ -1,6 +1,9 @@
-"""Canonical shop category catalog (slugs). Labels live in front i18n."""
+"""Canonical shop category catalog (slugs + default emojis).
 
-# (slug, sort_order) — keep in sync with migrations/0011 and i18n shopCategories.*
+Labels live in DB `label_i18n` (with legacy front i18n as fallback).
+"""
+
+# (slug, sort_order) — keep in sync with migrations/0011
 DEFAULT_SHOP_CATEGORIES: tuple[tuple[str, int], ...] = (
     ("bakery", 10),
     ("food", 20),
@@ -17,3 +20,21 @@ DEFAULT_SHOP_CATEGORIES: tuple[tuple[str, int], ...] = (
     ("services", 130),
     ("other", 999),
 )
+
+# Representative emoji per slug — keep in sync with migration backfill.
+DEFAULT_SHOP_CATEGORY_EMOJIS: dict[str, str] = {
+    "bakery": "🥖",
+    "food": "🛒",
+    "cafe": "☕",
+    "restaurant": "🍽️",
+    "bar": "🍺",
+    "butcher": "🥩",
+    "greengrocer": "🍎",
+    "fishmonger": "🐟",
+    "pharmacy": "💊",
+    "bookstore": "📚",
+    "clothing": "👗",
+    "hairdresser": "✂️",
+    "services": "💻",
+    "other": "📦",
+}
