@@ -18,6 +18,7 @@ from app.services.reward_media import (
     media_public_path,
     upsert_reward_media,
 )
+from app.services.towns import get_postal_code
 
 router = APIRouter(prefix="/rewards", tags=["rewards"])
 
@@ -114,6 +115,54 @@ async def _apply_reward_i18n(
         )
         reward.conditions_i18n = filled_cond
         reward.conditions = plain_cond or None
+
+
+@router.get("/public", response_model=list[RewardOut])
+async def list_rewards_public(
+    postal_code: str = Query(
+        ...,
+        min_length=4,
+        max_length=10,
+        description="Postal code that resolves to a town (e.g. 08380)",
+    ),
+    lang: str | None = Query(
+        default=None,
+        description="Response language (ca|es|en). Defaults to the town's default_lang.",
+    ),
+    demo: bool = Query(
+        default=False,
+        description="If true, return the fake/demo partition (is_fake=true)",
+    ),
+    db: AsyncSession = Depends(get_db),
+):
+    """Public rewards catalog for the residents app (no auth).
+
+    Resolves ``postal_code`` → town, then returns active rewards with
+    name/description/conditions translated to ``lang``.
+    """
+    postal = await get_postal_code(db, postal_code.strip())
+    if postal is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail="Unknown postal code",
+        )
+    town = await db.get(Town, postal.town_id)
+    fallback = (town.default_lang if town else DEFAULT_LANG) or DEFAULT_LANG
+    resolved = normalize_lang(lang) if lang else fallback
+
+    rows = (
+        await db.execute(
+            select(Reward)
+            .options(selectinload(Reward.shops), selectinload(Reward.media))
+            .where(
+                Reward.town_id == postal.town_id,
+                Reward.is_fake.is_(demo),
+                Reward.status == "active",
+            )
+            .order_by(Reward.created_at.desc())
+        )
+    ).scalars().all()
+    return [_to_out(r, resolved, fallback) for r in rows]
 
 
 @router.get("", response_model=list[RewardOut])

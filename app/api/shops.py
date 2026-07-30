@@ -35,6 +35,7 @@ from app.services.shop_media import (
     upsert_shop_media,
 )
 from app.services.shop_qr import build_scan_url, ensure_shop_qr, qr_png_url
+from app.services.towns import get_postal_code
 
 router = APIRouter(prefix="/shops", tags=["shops"])
 
@@ -122,6 +123,54 @@ async def _qr_out(db: AsyncSession, shop: Shop, *, is_fake: bool) -> QrOut:
         total_scans=total_scans,
         points_awarded=int(points_awarded),
     )
+
+
+@router.get("/public", response_model=list[ShopOut])
+async def list_shops_public(
+    postal_code: str = Query(
+        ...,
+        min_length=4,
+        max_length=10,
+        description="Postal code that resolves to a town (e.g. 08380)",
+    ),
+    lang: str | None = Query(
+        default=None,
+        description="Response language (ca|es|en). Defaults to the town's default_lang.",
+    ),
+    demo: bool = Query(
+        default=False,
+        description="If true, return the fake/demo partition (is_fake=true)",
+    ),
+    db: AsyncSession = Depends(get_db),
+):
+    """Public shops catalog for the residents app (no auth).
+
+    Resolves ``postal_code`` → town, then returns active shops with
+    description translated to ``lang``.
+    """
+    postal = await get_postal_code(db, postal_code.strip())
+    if postal is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail="Unknown postal code",
+        )
+    town = await db.get(Town, postal.town_id)
+    fallback = (town.default_lang if town else DEFAULT_LANG) or DEFAULT_LANG
+
+    rows = (
+        await db.execute(
+            select(Shop)
+            .where(
+                Shop.town_id == postal.town_id,
+                Shop.is_fake.is_(demo),
+                Shop.status == "active",
+            )
+            .order_by(Shop.created_at.desc())
+        )
+    ).scalars().all()
+    return [
+        await _shop_out(db, s, lang=lang, fallback_lang=fallback) for s in rows
+    ]
 
 
 @router.get("", response_model=list[ShopOut])

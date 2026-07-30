@@ -10,6 +10,7 @@ from app.deps import require_merchant
 from app.models import Promotion, Shop, Town, User
 from app.schemas import PromotionCreate, PromotionOut, PromotionUpdate
 from app.services.i18n_fields import apply_text_i18n
+from app.services.towns import get_postal_code
 
 router = APIRouter(prefix="/promotions", tags=["promotions"])
 
@@ -109,6 +110,56 @@ async def _apply_promo_i18n(
         )
         promo.conditions_i18n = filled_cond
         promo.conditions = plain_cond or None
+
+
+@router.get("/public", response_model=list[PromotionOut])
+async def list_promotions_public(
+    postal_code: str = Query(
+        ...,
+        min_length=4,
+        max_length=10,
+        description="Postal code that resolves to a town (e.g. 08380)",
+    ),
+    lang: str | None = Query(
+        default=None,
+        description="Response language (ca|es|en). Defaults to the town's default_lang.",
+    ),
+    demo: bool = Query(
+        default=False,
+        description="If true, return the fake/demo partition (is_fake=true)",
+    ),
+    db: AsyncSession = Depends(get_db),
+):
+    """Public promotions catalog for the residents app (no auth).
+
+    Resolves ``postal_code`` → town, then returns active promotions of
+    active shops in that town, with texts translated to ``lang``.
+    """
+    postal = await get_postal_code(db, postal_code.strip())
+    if postal is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail="Unknown postal code",
+        )
+    town = await db.get(Town, postal.town_id)
+    fallback = (town.default_lang if town else DEFAULT_LANG) or DEFAULT_LANG
+    resolved = normalize_lang(lang) if lang else fallback
+
+    rows = (
+        await db.execute(
+            select(Promotion)
+            .join(Shop, Shop.id == Promotion.shop_id)
+            .where(
+                Shop.town_id == postal.town_id,
+                Shop.status == "active",
+                Shop.is_fake.is_(demo),
+                Promotion.active.is_(True),
+                Promotion.is_fake.is_(demo),
+            )
+            .order_by(Promotion.created_at.desc())
+        )
+    ).scalars().all()
+    return [_resolve_out(p, resolved, fallback) for p in rows]
 
 
 @router.get("", response_model=list[PromotionOut])
