@@ -5,6 +5,8 @@ from pydantic import BaseModel, EmailStr, Field
 
 class RequestOtpIn(BaseModel):
     email: EmailStr
+    # UI language (app/BO). If omitted, use stored user.lang or Spanish.
+    lang: str | None = Field(default=None, pattern="^(ca|es|en)$")
 
 
 class VerifyOtpIn(BaseModel):

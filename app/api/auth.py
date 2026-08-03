@@ -23,6 +23,7 @@ from app.demo import (
     demo_enabled,
     is_demo_email,
 )
+from app.catalog.email_otp import normalize_otp_lang
 from app.email import send_otp_email
 from app.models import OtpCode, User
 from app.ratelimit import MAX_OTP_ATTEMPTS, limiter
@@ -110,7 +111,13 @@ async def request_otp(
     )
     db.add(otp)
     await db.commit()
-    await send_otp_email(payload.email, code)
+
+    # Prefer explicit lang from app/BO; else stored user.lang; else Spanish.
+    lang = payload.lang
+    if not lang:
+        stored = await db.scalar(select(User.lang).where(User.email == email))
+        lang = stored
+    await send_otp_email(payload.email, code, lang=normalize_otp_lang(lang))
     return MessageOut(message="Si el correu és vàlid, rebràs un codi.")
 
 

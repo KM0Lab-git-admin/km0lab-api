@@ -59,8 +59,9 @@ async def client(engine, monkeypatch):
 
     last_otp: dict[str, str] = {"code": ""}
 
-    async def fake_send_otp(to: str, code: str) -> None:
+    async def fake_send_otp(to: str, code: str, lang: str | None = None) -> None:
         last_otp["code"] = code
+        last_otp["lang"] = lang
 
     monkeypatch.setattr("app.api.auth.send_otp_email", fake_send_otp)
 
