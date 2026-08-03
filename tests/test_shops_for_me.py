@@ -125,3 +125,117 @@ async def test_shops_for_me_uses_user_postal_code(client, db_session):
     )
     assert r.status_code == 200, r.text
     assert {s["name"] for s in r.json()} == {"Botiga A", "Botiga B"}
+
+
+async def test_shops_for_me_demo_cp_heals_is_fake(client, db_session):
+    """Normal email + CP 00000 must see is_fake shops (heal user.is_fake)."""
+    town = Town(
+        name="Demo KM0",
+        slug="demo-km0-for-me",
+        entity_name="KM0 LAB Demo",
+        entity_type="private",
+        contact_email="demo@km0lab.com",
+        manager_name="Demo",
+        default_visit_points=10,
+    )
+    db_session.add(town)
+    await db_session.flush()
+    db_session.add(
+        TownPostalCode(postal_code="00000", town_id=town.id, is_primary=True)
+    )
+    fake_shop = Shop(
+        town_id=town.id,
+        name="[DEMO] Fleca",
+        contact_email="fleca@demo.cat",
+        status="active",
+        qr_code="DEMO-QR",
+        is_fake=True,
+    )
+    real_shop = Shop(
+        town_id=town.id,
+        name="Real Only",
+        contact_email="real@demo.cat",
+        status="active",
+        qr_code="REAL-QR",
+        is_fake=False,
+    )
+    user = User(
+        email="albert@test.cat",
+        slug="albert-demo",
+        postal_code="00000",
+        points=0,
+        is_fake=False,  # bug state after normal OTP signup
+        **flags_from_roles(["resident"]),
+    )
+    db_session.add_all([fake_shop, real_shop, user])
+    await db_session.commit()
+
+    token = create_access_token(user.id, roles=["resident"], town_id=town.id)
+    r = await client.get(
+        "/api/v1/shops/for-me",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"postal_code": "00000"},
+    )
+    assert r.status_code == 200, r.text
+    names = {s["name"] for s in r.json()}
+    assert names == {"[DEMO] Fleca"}
+    assert "Real Only" not in names
+
+    await db_session.refresh(user)
+    assert user.is_fake is True
+
+
+async def test_patch_me_demo_postal_sets_is_fake(client, db_session):
+    town = Town(
+        name="Demo KM0 Patch",
+        slug="demo-km0-patch",
+        entity_name="KM0 LAB Demo",
+        entity_type="private",
+        contact_email="demo2@km0lab.com",
+        manager_name="Demo",
+    )
+    other = Town(
+        name="Other Town",
+        slug="other-town-patch",
+        entity_name="Ajuntament",
+        entity_type="city_council",
+        contact_email="other@test.cat",
+        manager_name="Admin",
+    )
+    db_session.add_all([town, other])
+    await db_session.flush()
+    db_session.add(
+        TownPostalCode(postal_code="00000", town_id=town.id, is_primary=True)
+    )
+    db_session.add(
+        TownPostalCode(postal_code="08699", town_id=other.id, is_primary=True)
+    )
+    user = User(
+        email="patch-demo@test.cat",
+        slug="patch-demo",
+        postal_code="08699",
+        points=0,
+        is_fake=False,
+        **flags_from_roles(["resident"]),
+    )
+    db_session.add(user)
+    await db_session.commit()
+
+    token = create_access_token(user.id, roles=["resident"], town_id=other.id)
+    headers = {"Authorization": f"Bearer {token}"}
+    r = await client.patch(
+        "/api/v1/users/me",
+        headers=headers,
+        json={"postal_code": "00000"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["postal_code"] == "00000"
+    assert r.json()["is_fake"] is True
+
+    r = await client.patch(
+        "/api/v1/users/me",
+        headers=headers,
+        json={"postal_code": "08699"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["is_fake"] is False

@@ -16,7 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
-from app.demo import resolve_public_demo
+from app.demo import resolve_public_demo, sync_user_fake_partition
 from app.deps import (
     assert_shop_scope,
     assert_town_scope,
@@ -238,6 +238,11 @@ async def list_shops_for_resident(
         )
     town = await db.get(Town, postal.town_id)
     fallback = (town.default_lang if town else DEFAULT_LANG) or DEFAULT_LANG
+    # Heal residents who chose Demo KM0 (00000) but were created with
+    # is_fake=false (normal email OTP). Without this, for-me returns [].
+    if sync_user_fake_partition(user, postal.postal_code):
+        await db.commit()
+        await db.refresh(user)
     # Scans are partitioned by user.is_fake — list the same partition.
     use_demo = user.is_fake
 

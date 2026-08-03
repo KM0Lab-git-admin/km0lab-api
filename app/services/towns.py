@@ -13,6 +13,7 @@ from app.demo import (
     MALGRAT_CONTENT_TOWN,
     MALGRAT_CP,
     is_demo_postal_code,
+    sync_user_fake_partition,
 )
 from app.models import Town, TownPostalCode, User
 
@@ -64,6 +65,7 @@ async def assign_user_to_town(
     user.postal_code = postal.postal_code
     # Keep identity map in sync for town_id property in this request.
     user.postal_ref = postal
+    sync_user_fake_partition(user, postal.postal_code)
 
 
 async def load_user_with_town(db: AsyncSession, user_id: str) -> User | None:

@@ -48,6 +48,31 @@ def is_demo_postal_code(postal_code: str | None) -> bool:
     return (postal_code or "").strip() == DEMO_POSTAL_CODE
 
 
+def desired_user_is_fake(email: str, postal_code: str | None) -> bool:
+    """Partition a resident should live in.
+
+    - Seeded demo emails always stay on the fake partition.
+    - Everyone else: fake iff their postal code is Demo KM0 (00000).
+    """
+    if is_demo_email(email):
+        return True
+    return is_demo_postal_code(postal_code)
+
+
+def sync_user_fake_partition(user, postal_code: str | None = None) -> bool:
+    """Align ``user.is_fake`` with Demo KM0 membership.
+
+    ``postal_code`` defaults to ``user.postal_code``. Returns True if the
+    flag changed (caller should commit).
+    """
+    cp = user.postal_code if postal_code is None else postal_code
+    desired = desired_user_is_fake(user.email, cp)
+    if user.is_fake == desired:
+        return False
+    user.is_fake = desired
+    return True
+
+
 def resolve_public_demo(postal_code: str, requested: bool) -> bool:
     """Partition for public catalogs.
 

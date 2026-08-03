@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
+from app.demo import sync_user_fake_partition
 from app.deps import get_current_user
 from app.models import User
 from app.schemas import UpdateUserIn, UserOut
@@ -41,6 +42,9 @@ async def update_me(
                 )
             user.postal_code = postal.postal_code
             user.postal_ref = postal
+        # Demo KM0 (00000) lives on the is_fake partition; keep the user flag
+        # in sync so /shops/for-me and POST /scans see the showcase catalog.
+        sync_user_fake_partition(user, user.postal_code)
         data.pop("postal_code")
 
     if "slug" in data:

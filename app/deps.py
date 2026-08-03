@@ -5,6 +5,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
+from app.demo import sync_user_fake_partition
 from app.models import Shop, User
 from app.roles import (
     ROLE_ADMIN,
@@ -50,6 +51,10 @@ async def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found"
         )
+    # Residents on Demo KM0 (CP 00000) must live on the is_fake partition.
+    if sync_user_fake_partition(user):
+        await db.commit()
+        await db.refresh(user)
     return user
 
 
