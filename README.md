@@ -10,9 +10,9 @@ persiste el dominio de negocio (usuarios, puntos, comercios, QR, recompensas).
 
 | Área | Tablas |
 |------|--------|
-| Identidad | `users` (email único; `postal_code` → `town_postal_codes` → `towns`; roles multi), `otp_codes`, `towns`, `town_postal_codes` |
-| Comercios | `shops`, `promotions` |
-| Catálogo | `point_actions`, `rewards`, `reward_shops` |
+| Identidad | `users` (email único; `postal_code` → `town_postal_codes` → `towns`; roles multi), `otp_codes`, `towns`, `town_postal_codes`, `town_media` |
+| Comercios | `shops`, `shop_categories`, `shop_media`, `shop_payments`, `promotions` |
+| Catálogo | `point_actions`, `rewards`, `reward_shops`, `reward_media` |
 | Ledger / QR / canjes | `points_transactions`, `qr_scans`, `redemptions`, `redemption_events` |
 
 Naming en **inglés**. Auth: OTP email + JWT (`roles[]`, `town_id`, `shop_id`).
@@ -32,13 +32,16 @@ Header opcional `X-Active-Role` para fijar el contexto de la petición.
 | POST | `/api/v1/auth/request-otp` | público |
 | POST | `/api/v1/auth/verify-otp` | público |
 | GET/PATCH | `/api/v1/users/me` | autenticado |
-| GET/PATCH | `/api/v1/towns/{id}` | admin |
-| CRUD | `/api/v1/shops` · `/shops/me` · `/shops/me/qr` | admin / merchant |
+| GET/PATCH | `/api/v1/towns/{id}` (+ `/media`) | admin |
+| CRUD | `/api/v1/shops` · `/shops/me` · `/shops/me/qr` · `/shops/{id}/media` | admin / merchant |
+| GET/PATCH | `/api/v1/shop-categories` · `/{slug}` | público / admin |
 | CRUD | `/api/v1/promotions` | merchant |
-| CRUD | `/api/v1/actions` | admin |
-| CRUD | `/api/v1/rewards` | admin (+ lectura resident) |
-| POST/GET/PATCH | `/api/v1/redemptions` | resident / admin / merchant |
+| CRUD | `/api/v1/actions` (+ activate/deactivate) | admin |
+| CRUD | `/api/v1/rewards` (+ `/media`) | admin (+ lectura resident) |
+| POST/PATCH | `/api/v1/redemptions` · `/validate` · `/{id}/use` | resident / admin / merchant |
+| GET/POST | `/api/v1/points/me/history` · `/points/claim-birthday` | resident |
 | POST | `/api/v1/scans` | resident |
+| GET/POST | `/api/v1/payments` · `/payments/debts` | admin / merchant |
 | GET | `/api/v1/residents` | admin |
 | GET | `/api/v1/stats/admin` · `/stats/merchant` | admin / merchant |
 | GET | `/api/v1/health` | público |
@@ -74,7 +77,10 @@ alembic upgrade head
 alembic revision --autogenerate -m "..."
 ```
 
-Revisiones de dominio: `0003_towns_roles` … `0010_is_fake`.
+Historial completo en `migrations/versions/` (`0001_initial` → head actual
+`0024_shop_category_emoji`): roles multi, comercios/promos, catálogo de puntos
+y recompensas, ledger/scans/canjes, media (comercio/població/recompensa),
+pagos de comercio, i18n de entidades…
 
 ## Seed
 
