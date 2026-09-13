@@ -1512,6 +1512,7 @@ async def seed_demo() -> None:
         print("  QR demo shop: DEMO-KM0-QR")
         print(f"  Demo postal code: {DEMO_POSTAL_CODE} ({town.name})")
         print("  No deletes / no overwrites (BO i18n and config preserved)")
+        print("  Reward images: scripts/seed_media/rewards (Lovable finals)")
 
 
 if __name__ == "__main__":

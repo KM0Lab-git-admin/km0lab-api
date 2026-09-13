@@ -5,12 +5,17 @@ from __future__ import annotations
 import hashlib
 import uuid
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Reward, RewardShop
+from app.models import Reward, RewardMedia, RewardShop
+from app.services.reward_media import media_public_path
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+SEED_REWARD_MEDIA_DIR = _REPO_ROOT / "scripts" / "seed_media" / "rewards"
 
 
 def demo_reward_id(name: str) -> str:
@@ -61,6 +66,7 @@ FAKE_DEMO_REWARDS: tuple[dict[str, Any], ...] = (
         "points_required": 50,
         "value": "5€",
         "stock": 100,
+        "image": "val-5.png",
     },
     {
         "type": RewardType.BALANCE,
@@ -69,6 +75,7 @@ FAKE_DEMO_REWARDS: tuple[dict[str, Any], ...] = (
         "points_required": 100,
         "value": "10€",
         "stock": 80,
+        "image": "val-10.png",
     },
     {
         "type": RewardType.BALANCE,
@@ -77,6 +84,7 @@ FAKE_DEMO_REWARDS: tuple[dict[str, Any], ...] = (
         "points_required": 200,
         "value": "20€",
         "stock": 50,
+        "image": "val-20.png",
     },
     {
         "type": RewardType.BALANCE,
@@ -85,6 +93,7 @@ FAKE_DEMO_REWARDS: tuple[dict[str, Any], ...] = (
         "points_required": 500,
         "value": "50€",
         "stock": 20,
+        "image": "val-50.png",
     },
     # ── Producto ─────────────────────────────────────────────────────
     {
@@ -128,6 +137,7 @@ FAKE_DEMO_REWARDS: tuple[dict[str, Any], ...] = (
         "points_required": 120,
         "value": None,
         "stock": 40,
+        "image": "recompensa-bossa.png",
     },
     {
         "type": RewardType.MERCHANDISE,
@@ -136,6 +146,16 @@ FAKE_DEMO_REWARDS: tuple[dict[str, Any], ...] = (
         "points_required": 300,
         "value": None,
         "stock": 25,
+        "image": "recompensa-camiseta.png",
+    },
+    {
+        "type": RewardType.MERCHANDISE,
+        "name": "[DEMO] Gorra KM0 LAB",
+        "description": "Gorra oficial del programa KM0 LAB.",
+        "points_required": 180,
+        "value": "1 unitat",
+        "stock": 45,
+        "image": "recompensa-gorra.png",
     },
     # ── Experiencia ──────────────────────────────────────────────────
     {
@@ -153,6 +173,15 @@ FAKE_DEMO_REWARDS: tuple[dict[str, Any], ...] = (
         "points_required": 350,
         "value": "1 plaça",
         "stock": 10,
+    },
+    {
+        "type": RewardType.EXPERIENCE,
+        "name": "[DEMO] Entrada de cinema",
+        "description": "Una entrada per a qualsevol sessió no premium.",
+        "points_required": 200,
+        "value": "1 entrada",
+        "stock": 20,
+        "image": "recompensa-cine.png",
     },
 )
 
@@ -222,5 +251,71 @@ async def seed_fake_rewards(
                     RewardShop(id=_uuid(), reward_id=reward.id, shop_id=shop_id)
                 )
 
+    await upsert_demo_reward_images(db, town_id=town_id)
     await db.flush()
     return created if created else len(FAKE_DEMO_REWARDS)
+
+
+async def _reward_for_spec(
+    db: AsyncSession, *, town_id: str, spec: dict[str, Any]
+) -> Reward | None:
+    rid = demo_reward_id(spec["name"])
+    reward = await db.get(Reward, rid)
+    if reward is not None:
+        return reward
+    return (
+        await db.execute(
+            select(Reward).where(
+                Reward.is_fake.is_(True),
+                Reward.town_id == town_id,
+                Reward.name == spec["name"],
+            )
+        )
+    ).scalars().first()
+
+
+async def upsert_demo_reward_images(
+    db: AsyncSession, *, town_id: str
+) -> int:
+    """Attach/replace catalog PNGs from scripts/seed_media/rewards.
+
+    Does not change points, names or stock. Missing files are skipped.
+    """
+    updated = 0
+    for spec in FAKE_DEMO_REWARDS:
+        filename = spec.get("image")
+        if not filename:
+            continue
+        path = SEED_REWARD_MEDIA_DIR / str(filename)
+        if not path.is_file():
+            nested = SEED_REWARD_MEDIA_DIR / "rewards" / str(filename)
+            path = nested if nested.is_file() else path
+        if not path.is_file():
+            continue
+        reward = await _reward_for_spec(db, town_id=town_id, spec=spec)
+        if reward is None:
+            continue
+        data = path.read_bytes()
+        existing = (
+            await db.execute(
+                select(RewardMedia).where(RewardMedia.reward_id == reward.id)
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            existing.content_type = "image/png"
+            existing.data = data
+            existing.byte_size = len(data)
+        else:
+            db.add(
+                RewardMedia(
+                    id=_uuid(),
+                    reward_id=reward.id,
+                    content_type="image/png",
+                    data=data,
+                    byte_size=len(data),
+                )
+            )
+        reward.image_url = media_public_path(reward.id)
+        updated += 1
+    await db.flush()
+    return updated
