@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Reward, RewardMedia, RewardShop
-from app.services.reward_media import media_public_path
+from app.services.reward_media import media_public_path, media_version
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 SEED_REWARD_MEDIA_DIR = _REPO_ROOT / "scripts" / "seed_media" / "rewards"
@@ -305,17 +306,18 @@ async def upsert_demo_reward_images(
             existing.content_type = "image/png"
             existing.data = data
             existing.byte_size = len(data)
+            existing.updated_at = datetime.utcnow()
+            media_row = existing
         else:
-            db.add(
-                RewardMedia(
-                    id=_uuid(),
-                    reward_id=reward.id,
-                    content_type="image/png",
-                    data=data,
-                    byte_size=len(data),
-                )
+            media_row = RewardMedia(
+                id=_uuid(),
+                reward_id=reward.id,
+                content_type="image/png",
+                data=data,
+                byte_size=len(data),
             )
-        reward.image_url = media_public_path(reward.id)
+            db.add(media_row)
+        reward.image_url = media_public_path(reward.id, media_version(media_row))
         updated += 1
     await db.flush()
     return updated

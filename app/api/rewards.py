@@ -1,5 +1,7 @@
 """Rewards catalog (admin write, resident read) + catalog image media."""
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +19,7 @@ from app.services.reward_media import (
     delete_reward_media,
     get_reward_media,
     media_public_path,
+    media_version,
     upsert_reward_media,
 )
 from app.services.towns import get_postal_code
@@ -38,7 +41,7 @@ def _to_out(reward: Reward, lang: str, fallback_lang: str) -> RewardOut:
     data = RewardOut.model_validate(reward)
     data.shop_ids = [rs.shop_id for rs in (reward.shops or [])]
     if reward.media is not None:
-        data.image_url = media_public_path(reward.id)
+        data.image_url = media_public_path(reward.id, media_version(reward.media))
         data.has_image = True
     else:
         data.image_url = None
@@ -301,13 +304,14 @@ async def upload_reward_media(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Reward not found")
     _assert_admin_reward(user, reward)
     row = await upsert_reward_media(db, reward_id=reward.id, upload=file)
-    reward.image_url = media_public_path(reward.id)
+    reward.image_url = media_public_path(reward.id, media_version(row))
+    reward.updated_at = datetime.utcnow()
     await db.commit()
     return RewardMediaOut(
         reward_id=reward.id,
         content_type=row.content_type,
         byte_size=row.byte_size,
-        url=media_public_path(reward.id),
+        url=media_public_path(reward.id, media_version(row)),
     )
 
 
@@ -331,17 +335,24 @@ async def remove_reward_media(
 @router.get("/{reward_id}/media")
 async def download_reward_media(
     reward_id: str,
+    v: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Serve catalog image bytes (public so <img src> works without auth)."""
     row = await get_reward_media(db, reward_id)
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Media not found")
+    # Versioned URLs (?v=) can be cached; bare URLs must not keep a stale PNG.
+    cache = (
+        "public, max-age=31536000, immutable"
+        if v
+        else "no-store"
+    )
     return Response(
         content=row.data,
         media_type=row.content_type,
         headers={
-            "Cache-Control": "public, max-age=86400",
+            "Cache-Control": cache,
             "Content-Length": str(row.byte_size),
         },
     )

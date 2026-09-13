@@ -1,5 +1,7 @@
 """Upsert / delete binary reward catalog image."""
 
+from datetime import datetime
+
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,8 +14,20 @@ ALLOWED_CONTENT_TYPES = frozenset(
 MAX_BYTES = 5 * 1024 * 1024
 
 
-def media_public_path(reward_id: str) -> str:
-    return f"/api/v1/rewards/{reward_id}/media"
+def media_version(row: RewardMedia | None) -> str | None:
+    if row is None:
+        return None
+    ts = row.updated_at or row.created_at
+    if ts is None:
+        return str(row.byte_size or 0)
+    return str(int(ts.timestamp()))
+
+
+def media_public_path(reward_id: str, version: str | None = None) -> str:
+    path = f"/api/v1/rewards/{reward_id}/media"
+    if version:
+        return f"{path}?v={version}"
+    return path
 
 
 async def get_reward_media(
@@ -52,6 +66,7 @@ async def upsert_reward_media(
         existing.content_type = content_type
         existing.data = data
         existing.byte_size = len(data)
+        existing.updated_at = datetime.utcnow()
         await db.flush()
         return existing
 
