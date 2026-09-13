@@ -1,6 +1,6 @@
 """Town config endpoints (admin of that town) + brand media + public rules."""
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -9,6 +9,7 @@ from app.db import get_db
 from app.deps import assert_town_scope, require_admin
 from app.models import Town, User
 from app.schemas import TownMediaOut, TownOut, TownPublicOut, TownUpdate
+from app.services.media_http import media_bytes_response, media_not_found_response
 from app.services.town_media import (
     delete_town_media,
     get_town_media,
@@ -188,7 +189,7 @@ async def remove_town_media(
     await db.commit()
 
 
-@router.get("/{town_id}/media/{kind}")
+@router.api_route("/{town_id}/media/{kind}", methods=["GET", "HEAD"])
 async def download_town_media(
     town_id: str,
     kind: str,
@@ -197,12 +198,10 @@ async def download_town_media(
     """Serve town brand image (public so <img src> works without auth)."""
     row = await get_town_media(db, town_id, kind)
     if not row:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Media not found")
-    return Response(
-        content=row.data,
-        media_type=row.content_type,
-        headers={
-            "Cache-Control": "public, max-age=86400",
-            "Content-Length": str(row.byte_size),
-        },
+        return media_not_found_response()
+    return media_bytes_response(
+        row.data,
+        row.content_type,
+        cache="public, max-age=86400",
+        byte_size=row.byte_size,
     )

@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -15,6 +15,7 @@ from app.models import Redemption, RedemptionEvent, Reward, RewardShop, Town, Us
 from app.schemas import RewardCreate, RewardOut, RewardUpdate
 from app.schemas.rewards import RewardMediaOut
 from app.services.i18n_fields import apply_text_i18n
+from app.services.media_http import media_bytes_response, media_not_found_response
 from app.services.reward_media import (
     delete_reward_media,
     get_reward_media,
@@ -332,7 +333,7 @@ async def remove_reward_media(
     await db.commit()
 
 
-@router.get("/{reward_id}/media")
+@router.api_route("/{reward_id}/media", methods=["GET", "HEAD"])
 async def download_reward_media(
     reward_id: str,
     v: str | None = None,
@@ -341,20 +342,18 @@ async def download_reward_media(
     """Serve catalog image bytes (public so <img src> works without auth)."""
     row = await get_reward_media(db, reward_id)
     if not row:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Media not found")
+        return media_not_found_response()
     # Versioned URLs (?v=) can be cached; bare URLs must not keep a stale PNG.
     cache = (
         "public, max-age=31536000, immutable"
         if v
         else "no-store"
     )
-    return Response(
-        content=row.data,
-        media_type=row.content_type,
-        headers={
-            "Cache-Control": cache,
-            "Content-Length": str(row.byte_size),
-        },
+    return media_bytes_response(
+        row.data,
+        row.content_type,
+        cache=cache,
+        byte_size=row.byte_size,
     )
 
 

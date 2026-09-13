@@ -46,6 +46,8 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5173,http://127.0.0.1:5174,http://127.0.0.1:3000,"
         "http://127.0.0.1:8080,http://127.0.0.1:8081,http://127.0.0.1:8082"
     )
+    # UAT/prod frontends even if CORS_ORIGINS env is stale or incomplete.
+    cors_origin_regex: str = r"https://([a-z0-9-]+\.)*km0lab\.com"
 
     # Deep-link encoded in shop QR PNGs (app extracts ?c=token)
     qr_scan_base_url: str = "https://app.km0lab.com/scan"
