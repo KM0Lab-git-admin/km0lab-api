@@ -11,18 +11,18 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.demo import resolve_public_demo, sync_user_fake_partition
 from app.deps import (
+    ROLE_RESIDENT,
     assert_shop_scope,
     assert_town_scope,
     get_current_user,
+    get_optional_user,
     require_admin,
-    require_resident,
     resolve_acting_shop,
 )
 from app.catalog.i18n import DEFAULT_LANG, normalize_lang, resolve_i18n
@@ -39,6 +39,7 @@ from app.schemas.shops import ShopMediaOut
 from app.services.action_grants import ACTION_TYPE_QR_SCAN, find_active_action
 from app.services.i18n_fields import apply_text_i18n
 from app.services.shop_categories import resolve_category_slugs
+from app.services.media_http import media_bytes_response, media_not_found_response
 from app.services.shop_media import (
     delete_shop_media,
     get_shop_media,
@@ -200,52 +201,15 @@ async def list_shops_public(
     ]
 
 
-@router.get("/for-me", response_model=list[ShopResidentOut])
-async def list_shops_for_resident(
-    postal_code: str | None = Query(
-        default=None,
-        min_length=4,
-        max_length=10,
-        description=(
-            "Postal code that resolves to a town. "
-            "Defaults to the authenticated user's postal_code."
-        ),
-    ),
-    lang: str | None = Query(
-        default=None,
-        description="Response language (ca|es|en). Defaults to the town's default_lang.",
-    ),
-    user: User = Depends(require_resident),
-    db: AsyncSession = Depends(get_db),
-):
-    """Resident shop list for a town, with this user's QR scan state.
-
-    Note: ``GET /shops/me`` is the merchant profile; this endpoint is the
-    resident catalog with ``scanned`` / ``scan_available`` per shop.
-    Partition matches ``user.is_fake`` (same as ``POST /scans``).
-    """
-    cp = (postal_code or user.postal_code or "").strip()
-    if not cp:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            detail="postal_code required (query or user profile)",
-        )
-    postal = await get_postal_code(db, cp)
-    if postal is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            detail="Unknown postal code",
-        )
-    town = await db.get(Town, postal.town_id)
-    fallback = (town.default_lang if town else DEFAULT_LANG) or DEFAULT_LANG
-    # Heal residents who chose Demo KM0 (00000) but were created with
-    # is_fake=false (normal email OTP). Without this, for-me returns [].
-    if sync_user_fake_partition(user, postal.postal_code):
-        await db.commit()
-        await db.refresh(user)
-    # Scans are partitioned by user.is_fake — list the same partition.
-    use_demo = user.is_fake
-
+async def _resident_shop_catalog(
+    db: AsyncSession,
+    *,
+    postal,
+    lang: str | None,
+    fallback: str,
+    use_demo: bool,
+    user: User | None,
+) -> list[ShopResidentOut]:
     rows = (
         await db.execute(
             select(Shop)
@@ -260,33 +224,31 @@ async def list_shops_for_resident(
     if not rows:
         return []
 
-    shop_ids = [s.id for s in rows]
-    last_scans = (
-        await db.execute(
-            select(QrScan)
-            .where(
-                QrScan.user_id == user.id,
-                QrScan.shop_id.in_(shop_ids),
-            )
-            .order_by(QrScan.created_at.desc())
-        )
-    ).scalars().all()
     last_by_shop: dict[str, QrScan] = {}
-    for scan in last_scans:
-        if scan.shop_id not in last_by_shop:
-            last_by_shop[scan.shop_id] = scan
-
-    action = await find_active_action(
-        db,
-        action_type=ACTION_TYPE_QR_SCAN,
-        user=user,
-        town_id=postal.town_id,
-    )
-    cooldown_days = (
-        action.cooldown_days
-        if action is not None and action.cooldown_days is not None
-        else DEFAULT_COOLDOWN_DAYS
-    )
+    cooldown_days = DEFAULT_COOLDOWN_DAYS
+    if user is not None:
+        shop_ids = [s.id for s in rows]
+        last_scans = (
+            await db.execute(
+                select(QrScan)
+                .where(
+                    QrScan.user_id == user.id,
+                    QrScan.shop_id.in_(shop_ids),
+                )
+                .order_by(QrScan.created_at.desc())
+            )
+        ).scalars().all()
+        for scan in last_scans:
+            if scan.shop_id not in last_by_shop:
+                last_by_shop[scan.shop_id] = scan
+        action = await find_active_action(
+            db,
+            action_type=ACTION_TYPE_QR_SCAN,
+            user=user,
+            town_id=postal.town_id,
+        )
+        if action is not None and action.cooldown_days is not None:
+            cooldown_days = action.cooldown_days
 
     now = datetime.now(timezone.utc)
     out: list[ShopResidentOut] = []
@@ -310,6 +272,80 @@ async def list_shops_for_resident(
             )
         )
     return out
+
+
+@router.get("/for-me", response_model=list[ShopResidentOut])
+async def list_shops_for_resident(
+    postal_code: str | None = Query(
+        default=None,
+        min_length=4,
+        max_length=10,
+        description=(
+            "Postal code that resolves to a town. "
+            "Defaults to the authenticated user's postal_code."
+        ),
+    ),
+    lang: str | None = Query(
+        default=None,
+        description="Response language (ca|es|en). Defaults to the town's default_lang.",
+    ),
+    demo: bool = Query(
+        default=False,
+        description=(
+            "Guest / stale-token fallback: request the fake partition. "
+            "Ignored when the caller is a valid resident (uses user.is_fake)."
+        ),
+    ),
+    user: User | None = Depends(get_optional_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Resident shop list for a town, with this user's QR scan state.
+
+    Note: ``GET /shops/me`` is the merchant profile; this endpoint is the
+    resident catalog with ``scanned`` / ``scan_available`` per shop.
+    Partition matches ``user.is_fake`` (same as ``POST /scans``).
+
+    Missing, expired or unknown JWT does **not** 401: the public catalog
+    is returned (scan fields at defaults) so a stale demo session still
+    loads shops.
+    """
+    if user is not None and not user.has_role(ROLE_RESIDENT):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, detail="Insufficient role"
+        )
+
+    cp = (postal_code or (user.postal_code if user else None) or "").strip()
+    if not cp:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="postal_code required (query or user profile)",
+        )
+    postal = await get_postal_code(db, cp)
+    if postal is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail="Unknown postal code",
+        )
+    town = await db.get(Town, postal.town_id)
+    fallback = (town.default_lang if town else DEFAULT_LANG) or DEFAULT_LANG
+    if user is not None:
+        # Heal residents who chose Demo KM0 (00000) but were created with
+        # is_fake=false (normal email OTP). Without this, for-me returns [].
+        if sync_user_fake_partition(user, postal.postal_code):
+            await db.commit()
+            await db.refresh(user)
+        use_demo = user.is_fake
+    else:
+        use_demo = resolve_public_demo(postal.postal_code, demo)
+
+    return await _resident_shop_catalog(
+        db,
+        postal=postal,
+        lang=lang,
+        fallback=fallback,
+        use_demo=use_demo,
+        user=user,
+    )
 
 
 @router.get("", response_model=list[ShopOut])
@@ -499,7 +535,7 @@ async def upload_shop_media(
     )
 
 
-@router.get("/{shop_id}/media/{kind}")
+@router.api_route("/{shop_id}/media/{kind}", methods=["GET", "HEAD"])
 async def download_shop_media(
     shop_id: str,
     kind: str,
@@ -508,14 +544,12 @@ async def download_shop_media(
     """Serve logo/hero/qr bytes (public so <img src> works without auth)."""
     row = await get_shop_media(db, shop_id, kind)
     if not row:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Media not found")
-    return Response(
-        content=row.data,
-        media_type=row.content_type,
-        headers={
-            "Cache-Control": "public, max-age=86400",
-            "Content-Length": str(row.byte_size),
-        },
+        return media_not_found_response()
+    return media_bytes_response(
+        row.data,
+        row.content_type,
+        cache="public, max-age=86400",
+        byte_size=row.byte_size,
     )
 
 

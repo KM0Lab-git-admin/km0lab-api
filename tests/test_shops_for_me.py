@@ -55,11 +55,45 @@ async def _seed(db_session, *, postal_code="08600", name="VisitTown"):
     return town, postal_code, shop_a, shop_b
 
 
-async def test_shops_for_me_requires_auth(client, db_session):
+async def test_shops_for_me_guest_returns_public_catalog(client, db_session):
+    """No token → 200 public catalog (not 401), scan fields at defaults."""
     await _seed(db_session)
     await db_session.commit()
     r = await client.get("/api/v1/shops/for-me", params={"postal_code": "08600"})
-    assert r.status_code in (401, 403)
+    assert r.status_code == 200, r.text
+    rows = {s["name"]: s for s in r.json()}
+    assert set(rows) == {"Botiga A", "Botiga B"}
+    assert rows["Botiga A"]["scanned"] is False
+    assert rows["Botiga A"]["scan_available"] is True
+
+
+async def test_shops_for_me_invalid_token_returns_public(client, db_session):
+    """Expired / garbage JWT must not 401 — demo visitors keep a stale token."""
+    await _seed(db_session)
+    await db_session.commit()
+    r = await client.get(
+        "/api/v1/shops/for-me",
+        headers={"Authorization": "Bearer not-a-jwt"},
+        params={"postal_code": "08600"},
+    )
+    assert r.status_code == 200, r.text
+    assert {s["name"] for s in r.json()} == {"Botiga A", "Botiga B"}
+
+
+async def test_shops_for_me_unknown_user_token_returns_public(client, db_session):
+    """JWT for a user wiped after a UAT DB sync → public catalog."""
+    await _seed(db_session)
+    await db_session.commit()
+    token = create_access_token(
+        "deadbeefdeadbeefdeadbeefdeadbeef", roles=["resident"]
+    )
+    r = await client.get(
+        "/api/v1/shops/for-me",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"postal_code": "08600"},
+    )
+    assert r.status_code == 200, r.text
+    assert {s["name"] for s in r.json()} == {"Botiga A", "Botiga B"}
 
 
 async def test_shops_for_me_marks_scanned(client, db_session, capture_otp):
@@ -125,6 +159,54 @@ async def test_shops_for_me_uses_user_postal_code(client, db_session):
     )
     assert r.status_code == 200, r.text
     assert {s["name"] for s in r.json()} == {"Botiga A", "Botiga B"}
+
+
+async def test_shops_for_me_guest_demo_cp_uses_fake_partition(client, db_session):
+    """Stale JWT + CP 00000 must still show the showcase catalog."""
+    town = Town(
+        name="Demo KM0 Guest",
+        slug="demo-km0-guest",
+        entity_name="KM0 LAB Demo",
+        entity_type="private",
+        contact_email="demo-guest@km0lab.com",
+        manager_name="Demo",
+        default_visit_points=10,
+    )
+    db_session.add(town)
+    await db_session.flush()
+    db_session.add(
+        TownPostalCode(postal_code="00000", town_id=town.id, is_primary=True)
+    )
+    db_session.add_all(
+        [
+            Shop(
+                town_id=town.id,
+                name="[DEMO] Fleca Guest",
+                contact_email="fleca-guest@demo.cat",
+                status="active",
+                qr_code="DEMO-GUEST-QR",
+                is_fake=True,
+            ),
+            Shop(
+                town_id=town.id,
+                name="Real Only Guest",
+                contact_email="real-guest@demo.cat",
+                status="active",
+                qr_code="REAL-GUEST-QR",
+                is_fake=False,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    r = await client.get(
+        "/api/v1/shops/for-me",
+        headers={"Authorization": "Bearer expired-demo-jwt"},
+        params={"postal_code": "00000", "demo": "true"},
+    )
+    assert r.status_code == 200, r.text
+    names = {s["name"] for s in r.json()}
+    assert names == {"[DEMO] Fleca Guest"}
 
 
 async def test_shops_for_me_demo_cp_heals_is_fake(client, db_session):

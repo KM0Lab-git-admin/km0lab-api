@@ -17,6 +17,7 @@ from app.security import decode_access_token
 from app.services.towns import load_user_with_town
 
 bearer = HTTPBearer(auto_error=True)
+optional_bearer = HTTPBearer(auto_error=False)
 
 ACTING_SHOP_HEADER = "X-Acting-Shop-Id"
 
@@ -26,6 +27,7 @@ __all__ = [
     "ROLE_ADMIN",
     "ACTING_SHOP_HEADER",
     "get_current_user",
+    "get_optional_user",
     "get_active_role",
     "require_admin",
     "require_merchant",
@@ -52,6 +54,29 @@ async def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found"
         )
     # Residents on Demo KM0 (CP 00000) must live on the is_fake partition.
+    if sync_user_fake_partition(user):
+        await db.commit()
+        await db.refresh(user)
+    return user
+
+
+async def get_optional_user(
+    creds: HTTPAuthorizationCredentials | None = Depends(optional_bearer),
+    db: AsyncSession = Depends(get_db),
+) -> User | None:
+    """Like ``get_current_user`` but missing/invalid/unknown JWT → ``None``.
+
+    Used by resident-facing GETs (e.g. ``/shops/for-me``) so a stale demo
+    session does not 401; the handler falls back to the public catalog.
+    """
+    if creds is None:
+        return None
+    payload = decode_access_token(creds.credentials)
+    if not payload:
+        return None
+    user = await load_user_with_town(db, payload["sub"])
+    if not user:
+        return None
     if sync_user_fake_partition(user):
         await db.commit()
         await db.refresh(user)
