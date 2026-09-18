@@ -1,8 +1,16 @@
 """Public catalogs by postal code (rewards / shops / promotions)."""
 
 import pytest
+from sqlalchemy import select
 
+from app.catalog.rewards import (
+    DEMO_NAME_PREFIX,
+    FAKE_DEMO_REWARDS,
+    seed_fake_rewards,
+    seed_real_rewards,
+)
 from app.models import Promotion, Reward, Shop, Town, TownPostalCode
+from app.services.towns import ensure_demo_town
 from app.utils.slug import slugify
 
 
@@ -178,6 +186,87 @@ async def test_public_rewards_demo_cp_and_malgrat_guard(client, db_session):
         params={"postal_code": "08380", "demo": True},
     )
     assert [r["name"] for r in malgrat.json()] == ["Premi CA"]
+
+
+@pytest.mark.asyncio
+async def test_public_rewards_parity_demo_and_malgrat(client, db_session):
+    """Demo (00000) and Malgrat (08380) serve the same rewards catalog."""
+    demo_town = await ensure_demo_town(db_session)
+    await seed_fake_rewards(db_session, town_id=demo_town.id)
+
+    malgrat = Town(
+        name="Malgrat de Mar",
+        slug="malgrat-de-mar",
+        entity_name="Ajuntament de Malgrat de Mar",
+        entity_type="city_council",
+        contact_email="admin@malgrat.cat",
+        manager_name="Admin",
+        default_lang="ca",
+    )
+    db_session.add(malgrat)
+    await db_session.flush()
+    db_session.add(
+        TownPostalCode(postal_code="08380", town_id=malgrat.id, is_primary=True)
+    )
+    await db_session.flush()
+    await seed_real_rewards(db_session, town_id=malgrat.id)
+    await db_session.commit()
+
+    demo = await client.get(
+        "/api/v1/rewards/public", params={"postal_code": "00000"}
+    )
+    real = await client.get(
+        "/api/v1/rewards/public", params={"postal_code": "08380"}
+    )
+    assert demo.status_code == 200, demo.text
+    assert real.status_code == 200, real.text
+
+    def normalized(rows):
+        return sorted(
+            (
+                r["name"].removeprefix(DEMO_NAME_PREFIX),
+                r["type"],
+                r["points_required"],
+                r["value"],
+            )
+            for r in rows
+        )
+
+    assert len(demo.json()) == len(FAKE_DEMO_REWARDS)
+    assert normalized(demo.json()) == normalized(real.json())
+
+    # Demo is the reference: later edits and deletions propagate on re-seed.
+    edited = (
+        await db_session.execute(
+            select(Reward).where(
+                Reward.town_id == demo_town.id,
+                Reward.is_fake.is_(True),
+                Reward.name == "[DEMO] Gorra KM0 LAB",
+            )
+        )
+    ).scalars().one()
+    edited.points_required = 999
+    deleted = (
+        await db_session.execute(
+            select(Reward).where(
+                Reward.town_id == demo_town.id,
+                Reward.is_fake.is_(True),
+                Reward.name == "[DEMO] Samarreta KM0 LAB",
+            )
+        )
+    ).scalars().one()
+    await db_session.delete(deleted)
+    await db_session.commit()
+
+    await seed_real_rewards(db_session, town_id=malgrat.id)
+    await db_session.commit()
+
+    real = await client.get(
+        "/api/v1/rewards/public", params={"postal_code": "08380"}
+    )
+    by_name = {r["name"]: r for r in real.json()}
+    assert by_name["Gorra KM0 LAB"]["points_required"] == 999
+    assert "Samarreta KM0 LAB" not in by_name
 
 
 @pytest.mark.asyncio

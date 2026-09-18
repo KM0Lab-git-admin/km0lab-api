@@ -15,8 +15,6 @@ from sqlalchemy import select
 from app.config import get_settings
 from app.db import SessionLocal
 from app.models import (
-    Reward,
-    RewardShop,
     Shop,
     ShopCategory,
     Town,
@@ -24,6 +22,7 @@ from app.models import (
     User,
 )
 from app.catalog.point_actions import ensure_town_point_actions
+from app.catalog.rewards import seed_real_rewards
 from app.catalog.shop_categories import DEFAULT_SHOP_CATEGORIES
 from app.services.points import apply_points
 from app.services.towns import ensure_demo_town
@@ -91,8 +90,21 @@ async def seed() -> None:
                     continue
                 n = await ensure_town_point_actions(db, town.id, is_fake=False)
                 print(f"Real point actions reset for {town.name}: {n}")
+                shop_id = (
+                    await db.execute(
+                        select(Shop.id).where(
+                            Shop.town_id == town.id,
+                            Shop.is_fake.is_(False),
+                        )
+                    )
+                ).scalars().first()
+                r = await seed_real_rewards(db, town_id=town.id, shop_id=shop_id)
+                print(f"Real rewards ensured for {town.name}: {r}")
             await db.commit()
-            print("Seed skipped: towns already present (categories + demo + actions ensured).")
+            print(
+                "Seed skipped: towns already present "
+                "(categories + demo + actions + rewards ensured)."
+            )
             return
 
         for spec in TOWNS:
@@ -187,33 +199,8 @@ async def seed() -> None:
 
             await ensure_town_point_actions(db, town.id, is_fake=False)
 
-            reward = Reward(
-                id=_id(),
-                town_id=town.id,
-                name="Descompte 5 €",
-                description="Vale de 5 € en comerços adherits",
-                type="discount",
-                points_required=500,
-                value="5€",
-                stock=100,
-                status="active",
-            )
-            db.add(reward)
-            await db.flush()
-            db.add(RewardShop(id=_id(), reward_id=reward.id, shop_id=shop.id))
-
-            db.add(
-                Reward(
-                    id=_id(),
-                    town_id=town.id,
-                    name="Experiència local",
-                    description="Activitat cultural al municipi",
-                    type="experience",
-                    points_required=1000,
-                    stock=20,
-                    status="active",
-                )
-            )
+            # Same catalog as the demo showcase, as real (is_fake=False) rows.
+            await seed_real_rewards(db, town_id=town.id, shop_id=shop.id)
 
         await db.commit()
         print(f"Seeded {len(TOWNS)} towns with postal codes, admins and catalog.")

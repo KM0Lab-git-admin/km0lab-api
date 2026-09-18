@@ -11,9 +11,11 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from app.models import Reward, RewardMedia, RewardShop
+from app.models import Redemption, Reward, RewardMedia, RewardShop
 from app.services.reward_media import media_public_path, media_version
+from app.services.towns import ensure_demo_town
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 SEED_REWARD_MEDIA_DIR = _REPO_ROOT / "scripts" / "seed_media" / "rewards"
@@ -22,6 +24,21 @@ SEED_REWARD_MEDIA_DIR = _REPO_ROOT / "scripts" / "seed_media" / "rewards"
 def demo_reward_id(name: str) -> str:
     """Stable id so re-seed updates in place and keeps reward_media."""
     return hashlib.sha256(f"demo-reward:{name}".encode()).hexdigest()[:32]
+
+
+DEMO_NAME_PREFIX = "[DEMO] "
+
+
+def real_reward_id(town_id: str, name: str) -> str:
+    """Stable id for real catalog rewards, namespaced per town."""
+    return hashlib.sha256(
+        f"real-reward:{town_id}:{name}".encode()
+    ).hexdigest()[:32]
+
+
+def real_reward_name(name: str) -> str:
+    """Catalog name without the demo marker."""
+    return name.removeprefix(DEMO_NAME_PREFIX)
 
 
 # BO labels: Descuento | Saldo | Producto | Servicio | Merchandising | Experiencia
@@ -257,19 +274,191 @@ async def seed_fake_rewards(
     return created if created else len(FAKE_DEMO_REWARDS)
 
 
+def _strip_demo_prefix_i18n(i18n: dict | None) -> dict | None:
+    if not i18n:
+        return i18n
+    return {
+        lang: text.removeprefix(DEMO_NAME_PREFIX) if isinstance(text, str) else text
+        for lang, text in i18n.items()
+    }
+
+
+async def _mirror_demo_media(
+    db: AsyncSession, *, source: Reward, target: Reward
+) -> None:
+    """Copy the demo reward's image bytes onto the real mirror."""
+    src = source.media
+    if src is None:
+        return
+    # Explicit query: relationship access on flushed/new objects would
+    # trigger a lazy load, which is not allowed in async sessions.
+    dst = (
+        await db.execute(
+            select(RewardMedia).where(RewardMedia.reward_id == target.id)
+        )
+    ).scalar_one_or_none()
+    if dst is not None and dst.data == src.data:
+        return
+    if dst is None:
+        dst = RewardMedia(
+            id=_uuid(),
+            reward_id=target.id,
+            content_type=src.content_type,
+            data=src.data,
+            byte_size=src.byte_size,
+        )
+        db.add(dst)
+    else:
+        dst.content_type = src.content_type
+        dst.data = src.data
+        dst.byte_size = src.byte_size
+        dst.updated_at = datetime.utcnow()
+    # Version before flush: after flush the server-default timestamps are
+    # expired and reading them would trigger a lazy refresh (no async IO).
+    target.image_url = media_public_path(target.id, media_version(dst))
+    await db.flush()
+
+
+async def seed_real_rewards(
+    db: AsyncSession,
+    *,
+    town_id: str,
+    shop_id: str | None = None,
+) -> int:
+    """Mirror the demo town's fake rewards as real (is_fake=False) rows.
+
+    Demo KM0 (CP 00000) is the content reference: real towns serve the
+    same rewards. Rows matched by name (without the "[DEMO] " prefix)
+    are updated to mirror the demo reward; real rows absent from the
+    demo partition are deleted when no redemption references them.
+    Fresh databases seed the static catalog into the demo town first.
+    """
+    demo_town = await ensure_demo_town(db)
+    if town_id == demo_town.id:
+        return 0
+
+    async def _demo_rows() -> list[Reward]:
+        return (
+            (
+                await db.execute(
+                    select(Reward)
+                    .options(selectinload(Reward.media))
+                    .where(
+                        Reward.town_id == demo_town.id,
+                        Reward.is_fake.is_(True),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    demo_rows = await _demo_rows()
+    if not demo_rows:
+        # Fresh DB: seed the showcase first, then mirror it.
+        await seed_fake_rewards(db, town_id=demo_town.id)
+        demo_rows = await _demo_rows()
+
+    synced = 0
+    keep_names: set[str] = set()
+    for src in demo_rows:
+        name = real_reward_name(src.name)
+        keep_names.add(name)
+        rid = real_reward_id(town_id, name)
+        reward = await db.get(Reward, rid)
+        if reward is None:
+            reward = (
+                await db.execute(
+                    select(Reward).where(
+                        Reward.is_fake.is_(False),
+                        Reward.town_id == town_id,
+                        Reward.name == name,
+                    )
+                )
+            ).scalars().first()
+        if reward is None:
+            reward = Reward(id=rid, town_id=town_id, is_fake=False)
+            db.add(reward)
+
+        reward.name = name
+        reward.description = src.description or ""
+        reward.type = src.type
+        reward.points_required = src.points_required
+        reward.value = src.value
+        reward.stock = src.stock
+        reward.conditions = src.conditions
+        reward.valid_from = src.valid_from
+        reward.valid_until = src.valid_until
+        reward.status = src.status
+        reward.name_i18n = _strip_demo_prefix_i18n(src.name_i18n)
+        reward.description_i18n = src.description_i18n
+        reward.conditions_i18n = src.conditions_i18n
+        reward.i18n_source_lang = src.i18n_source_lang
+        await db.flush()
+        await _mirror_demo_media(db, source=src, target=reward)
+
+        # Balance vouchers redeem at the town pilot shop when unlinked.
+        if shop_id and src.type == RewardType.BALANCE:
+            has_link = (
+                await db.execute(
+                    select(RewardShop.id).where(RewardShop.reward_id == reward.id)
+                )
+            ).scalars().first()
+            if has_link is None:
+                db.add(
+                    RewardShop(id=_uuid(), reward_id=reward.id, shop_id=shop_id)
+                )
+        synced += 1
+
+    # Prune real rewards that no longer exist in the demo partition.
+    # Media/shops eager-loaded so the ORM delete cascade needs no lazy IO.
+    existing = (
+        await db.execute(
+            select(Reward)
+            .options(selectinload(Reward.media), selectinload(Reward.shops))
+            .where(
+                Reward.town_id == town_id, Reward.is_fake.is_(False)
+            )
+        )
+    ).scalars().all()
+    for old in existing:
+        if old.name in keep_names:
+            continue
+        has_redemption = (
+            await db.execute(
+                select(Redemption.id).where(Redemption.reward_id == old.id)
+            )
+        ).scalars().first()
+        if has_redemption is not None:
+            continue  # keep: redemption history references it
+        await db.delete(old)  # cascades reward_media + reward_shops
+
+    await db.flush()
+    return synced
+
+
 async def _reward_for_spec(
-    db: AsyncSession, *, town_id: str, spec: dict[str, Any]
+    db: AsyncSession,
+    *,
+    town_id: str,
+    spec: dict[str, Any],
+    is_fake: bool = True,
 ) -> Reward | None:
-    rid = demo_reward_id(spec["name"])
+    if is_fake:
+        rid = demo_reward_id(spec["name"])
+        name = spec["name"]
+    else:
+        name = real_reward_name(spec["name"])
+        rid = real_reward_id(town_id, name)
     reward = await db.get(Reward, rid)
     if reward is not None:
         return reward
     return (
         await db.execute(
             select(Reward).where(
-                Reward.is_fake.is_(True),
+                Reward.is_fake.is_(is_fake),
                 Reward.town_id == town_id,
-                Reward.name == spec["name"],
+                Reward.name == name,
             )
         )
     ).scalars().first()
@@ -277,6 +466,13 @@ async def _reward_for_spec(
 
 async def upsert_demo_reward_images(
     db: AsyncSession, *, town_id: str
+) -> int:
+    """Attach/replace catalog PNGs on the demo (is_fake) partition."""
+    return await upsert_reward_images(db, town_id=town_id, is_fake=True)
+
+
+async def upsert_reward_images(
+    db: AsyncSession, *, town_id: str, is_fake: bool
 ) -> int:
     """Attach/replace catalog PNGs from scripts/seed_media/rewards.
 
@@ -293,7 +489,9 @@ async def upsert_demo_reward_images(
             path = nested if nested.is_file() else path
         if not path.is_file():
             continue
-        reward = await _reward_for_spec(db, town_id=town_id, spec=spec)
+        reward = await _reward_for_spec(
+            db, town_id=town_id, spec=spec, is_fake=is_fake
+        )
         if reward is None:
             continue
         data = path.read_bytes()
