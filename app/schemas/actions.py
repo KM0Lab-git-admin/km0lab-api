@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 ACTION_TYPE_PATTERN = (
 
-    "^(signup|birthday|qr_scan|first_scan|web_visit|web_signup|event|custom)$"
+    "^(signup|birthday|qr_scan|first_scan|web_visit|web_signup|event|custom|invite_person|invite_business)$"
 
 )
 

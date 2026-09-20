@@ -101,9 +101,20 @@ Cuentas fijas (código **123456**, sin email OTP). Solo ven filas `is_fake=true`
 | `merchant@km0lab.com` | resident + merchant |
 | `admin@km0lab.com` | resident + admin |
 
+## Malgrat QA (development / staging)
+
+Mismo código **123456**, pueblo **real** (`08380`, `is_fake=false`). Detalle: [`docs/LOCAL-ACCOUNTS.md`](docs/LOCAL-ACCOUNTS.md).
+
+| Email | Roles |
+|-------|--------|
+| `admin-malgrat@km0lab.com` | resident + admin |
+| `merchant1-malgrat@km0lab.com` | resident + merchant |
+| `merchant2-malgrat@km0lab.com` | resident + merchant |
+
 ```bash
-python -m scripts.seed          # towns reales (Malgrat…)
-python -m scripts.seed_demo     # usuarios + catálogo fake Malgrat
+python -m scripts.seed          # towns reales (Malgrat…) + cuentas QA
+python -m scripts.seed_malgrat_qa
+python -m scripts.seed_demo     # usuarios + catálogo fake Demo KM0
 ```
 
 Desactivado automáticamente si `ENVIRONMENT=production`.

@@ -7,11 +7,15 @@ class RequestOtpIn(BaseModel):
     email: EmailStr
     # UI language (app/BO). If omitted, use stored user.lang or Spanish.
     lang: str | None = Field(default=None, pattern="^(ca|es|en)$")
+    invite_code: str | None = Field(default=None, max_length=32)
+    postal_code: str | None = Field(default=None, max_length=10)
 
 
 class VerifyOtpIn(BaseModel):
     email: EmailStr
     code: str = Field(min_length=4, max_length=8)
+    invite_code: str | None = Field(default=None, max_length=32)
+    postal_code: str | None = Field(default=None, max_length=10)
 
 
 class UserOut(BaseModel):

@@ -25,6 +25,7 @@ from app.catalog.point_actions import ensure_town_point_actions
 from app.catalog.rewards import seed_real_rewards
 from app.catalog.shop_categories import DEFAULT_SHOP_CATEGORIES
 from app.services.points import apply_points
+from app.services.malgrat_qa import ensure_malgrat_qa_accounts
 from app.services.towns import ensure_demo_town
 from app.utils.slug import slugify, split_full_name
 
@@ -101,6 +102,14 @@ async def seed() -> None:
                 r = await seed_real_rewards(db, town_id=town.id, shop_id=shop_id)
                 print(f"Real rewards ensured for {town.name}: {r}")
             await db.commit()
+            try:
+                qa = await ensure_malgrat_qa_accounts(db)
+                await db.commit()
+                print("Malgrat QA accounts:")
+                for line in qa:
+                    print(line)
+            except RuntimeError as exc:
+                print(f"Malgrat QA skipped: {exc}")
             print(
                 "Seed skipped: towns already present "
                 "(categories + demo + actions + rewards ensured)."
@@ -204,8 +213,16 @@ async def seed() -> None:
 
         await db.commit()
         print(f"Seeded {len(TOWNS)} towns with postal codes, admins and catalog.")
-        print(f"  Malgrat admin: {ADMIN_MALGRAT_EMAIL}")
+        print(f"  Legacy Malgrat contact: {ADMIN_MALGRAT_EMAIL}")
         print(f"  Malgrat resident+merchant: {RESIDENT_MERCHANT_EMAIL}")
+        try:
+            qa = await ensure_malgrat_qa_accounts(db)
+            await db.commit()
+            print("Malgrat QA accounts:")
+            for line in qa:
+                print(line)
+        except RuntimeError as exc:
+            print(f"Malgrat QA skipped: {exc}")
 
 
 if __name__ == "__main__":

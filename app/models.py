@@ -214,6 +214,8 @@ class OtpCode(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime)
     consumed: Mapped[int] = mapped_column(Integer, default=0)  # 0 | 1
     attempts: Mapped[int] = mapped_column(Integer, default=0)
+    # Last-click invitation code bound when the OTP was requested.
+    invite_code: Mapped[str | None] = mapped_column(String(32), default=None)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
@@ -258,6 +260,7 @@ class Shop(Base):
     # List of shop_categories.slug (not translated labels).
     categories: Mapped[list] = mapped_column(JSON, default=list)
     contact_email: Mapped[str] = mapped_column(String(255), default="")
+    tax_id: Mapped[str | None] = mapped_column(String(32), default=None)
     visit_points: Mapped[int] = mapped_column(Integer, default=10)
     address: Mapped[str | None] = mapped_column(String(255), default=None)
     postal_code: Mapped[str | None] = mapped_column(String(10), default=None)
@@ -362,7 +365,7 @@ class PointAction(Base):
     )
     type: Mapped[str] = mapped_column(
         String(30)
-    )  # signup | birthday | qr_scan | first_scan | web_visit | web_signup | event | custom
+    )  # signup | birthday | qr_scan | first_scan | web_visit | web_signup | event | custom | invite_person | invite_business
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str] = mapped_column(Text, default="")
     points: Mapped[int] = mapped_column(Integer, default=0)
@@ -488,6 +491,11 @@ class RewardShop(Base):
 
 class PointsTransaction(Base):
     __tablename__ = "points_transactions"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "type", "ref_id", name="uq_points_tx_user_type_ref"
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(
@@ -498,7 +506,7 @@ class PointsTransaction(Base):
     )
     type: Mapped[str] = mapped_column(
         String(30)
-    )  # welcome | birthday | action | scan | redemption | adjustment
+    )  # welcome | birthday | action | scan | redemption | adjustment | invite_person | invite_business
     points: Mapped[int] = mapped_column(Integer)  # +/-
     ref_id: Mapped[str | None] = mapped_column(String(32), default=None, index=True)
     description: Mapped[str | None] = mapped_column(String(255), default=None)
@@ -607,4 +615,101 @@ class RedemptionEvent(Base):
     is_fake: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
+    )
+
+
+# ── Invitations ───────────────────────────────────────────────────────
+
+
+class InvitationLink(Base):
+    """Reusable public code per inviter + kind (person | business)."""
+
+    __tablename__ = "invitation_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "inviter_user_id", "kind", name="uq_invitation_link_user_kind"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    public_code: Mapped[str] = mapped_column(
+        String(16), unique=True, index=True
+    )
+    inviter_user_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("users.id"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(16), index=True)  # person | business
+    town_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("towns.id"), index=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), default="active", index=True
+    )  # active | revoked
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+
+class InvitationEvent(Base):
+    """Observable milestones. Not delivery proof and never a conversion."""
+
+    __tablename__ = "invitation_events"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    link_id: Mapped[str | None] = mapped_column(
+        String(32),
+        ForeignKey("invitation_links.id", ondelete="SET NULL"),
+        default=None,
+        index=True,
+    )
+    event_type: Mapped[str] = mapped_column(String(40), index=True)
+    channel: Mapped[str | None] = mapped_column(String(32), default=None)
+    actor_user_id: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("users.id"), default=None, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), index=True
+    )
+
+
+class InvitationConversion(Base):
+    """Completed attributed signup (citizen or business) + reward snapshot."""
+
+    __tablename__ = "invitation_conversions"
+    __table_args__ = (
+        UniqueConstraint(
+            "kind", "invitee_user_id", name="uq_invite_conv_kind_user"
+        ),
+        UniqueConstraint("shop_id", name="uq_invite_conv_shop"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    link_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("invitation_links.id"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(16), index=True)
+    invitee_user_id: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("users.id"), default=None, index=True
+    )
+    shop_id: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("shops.id"), default=None, index=True
+    )
+    town_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("towns.id"), index=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), default="pending_reward", index=True
+    )  # pending_reward | granted | failed
+    reward_points: Mapped[int] = mapped_column(Integer, default=0)
+    points_tx_id: Mapped[str | None] = mapped_column(
+        String(32),
+        ForeignKey("points_transactions.id"),
+        default=None,
+        index=True,
+    )
+    display_name: Mapped[str | None] = mapped_column(String(160), default=None)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+    granted_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), index=True
     )

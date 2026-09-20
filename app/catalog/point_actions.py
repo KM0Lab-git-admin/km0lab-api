@@ -74,6 +74,22 @@ DEFAULT_POINT_ACTIONS: tuple[dict[str, Any], ...] = (
         "active": True,
         "visible_home": True,
     },
+    {
+        "type": "invite_person",
+        "name": "Invitació de veí",
+        "description": "Alta d'un veí completada des d'una invitació",
+        "points": 100,
+        "active": True,
+        "visible_home": False,
+    },
+    {
+        "type": "invite_business",
+        "name": "Invitació de comerç",
+        "description": "Alta d'un comerç completada des d'una invitació",
+        "points": 500,
+        "active": True,
+        "visible_home": False,
+    },
 )
 
 

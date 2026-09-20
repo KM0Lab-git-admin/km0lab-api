@@ -41,6 +41,16 @@ FIXED_ACTION_LABELS: dict[str, dict[str, dict[str, str]]] = {
         "es": {"name": "Primer escaneo de un comercio", "description": "Bonificación única la primera vez que se escanea un QR de comercio"},
         "en": {"name": "First merchant scan", "description": "One-time bonus the first time a merchant QR is scanned"},
     },
+    "invite_person": {
+        "ca": {"name": "Invitació de veí", "description": "Alta d'un veí completada des d'una invitació"},
+        "es": {"name": "Invitación de vecino", "description": "Alta de un vecino completada desde una invitación"},
+        "en": {"name": "Neighbour invitation", "description": "Completed neighbour signup from an invitation"},
+    },
+    "invite_business": {
+        "ca": {"name": "Invitació de comerç", "description": "Alta d'un comerç completada des d'una invitació"},
+        "es": {"name": "Invitación de comercio", "description": "Alta de un comercio completada desde una invitación"},
+        "en": {"name": "Shop invitation", "description": "Completed shop signup from an invitation"},
+    },
 }
 
 FIXED_ACTION_TYPES: frozenset[str] = frozenset(FIXED_ACTION_LABELS.keys())

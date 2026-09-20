@@ -4,8 +4,9 @@ Identity is the email. Users may hold multiple roles (resident+merchant
 or resident+admin; never admin+merchant). JWT embeds the full roles list
 plus town/shop scope.
 
-Demo accounts (dev/staging): resident@ / merchant@ / admin@km0lab.com
-authenticate with fixed code 123456 and only see is_fake content.
+Fixed OTP 123456 (dev/staging only):
+- Demo KM0 (is_fake): resident@ / merchant@ / admin@km0lab.com
+- Malgrat real: admin-malgrat@ / merchant1-malgrat@ / merchant2-malgrat@km0lab.com
 """
 
 import secrets
@@ -19,9 +20,10 @@ from app.config import get_settings
 from app.db import get_db
 from app.demo import (
     DEMO_CODE,
-    DEMO_ROLES,
     demo_enabled,
     is_demo_email,
+    is_fixed_otp_email,
+    is_malgrat_qa_email,
 )
 from app.catalog.email_otp import normalize_otp_lang
 from app.email import send_otp_email
@@ -37,6 +39,13 @@ from app.roles import (
 from app.schemas import AuthOut, MessageOut, RequestOtpIn, UserOut, VerifyOtpIn
 from app.security import create_access_token, hash_otp, verify_otp
 from app.services.action_grants import grant_signup_points
+from app.services.invitations import (
+    EVENT_REG_STARTED,
+    apply_invitee_postal_code,
+    convert_business_activation,
+    convert_person_signup,
+    record_event,
+)
 from app.services.slugs import allocate_user_slug
 from app.services.towns import assign_user_to_town, load_user_with_town
 
@@ -88,11 +97,11 @@ async def request_otp(
     db: AsyncSession = Depends(get_db),
 ):
     email = payload.email.lower()
-    if is_demo_email(email):
+    if is_fixed_otp_email(email):
         if not demo_enabled():
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Demo login disabled in this environment",
+                detail="Fixed OTP login disabled in this environment",
             )
         # No email sent — client proceeds with fixed code 123456.
         return MessageOut(message="Si el correu és vàlid, rebràs un codi.")
@@ -108,8 +117,14 @@ async def request_otp(
         code_hash=hash_otp(code),
         expires_at=datetime.now(timezone.utc)
         + timedelta(minutes=settings.otp_ttl_minutes),
+        invite_code=(payload.invite_code or "").strip().lower() or None,
     )
     db.add(otp)
+    await db.flush()
+    if otp.invite_code:
+        await record_event(
+            db, event_type=EVENT_REG_STARTED, code=otp.invite_code
+        )
     await db.commit()
 
     # Prefer explicit lang from app/BO; else stored user.lang; else Spanish.
@@ -130,11 +145,11 @@ async def verify_otp_endpoint(
 ):
     email = payload.email.lower()
 
-    if is_demo_email(email):
+    if is_fixed_otp_email(email):
         if not demo_enabled():
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Demo login disabled in this environment",
+                detail="Fixed OTP login disabled in this environment",
             )
         if payload.code != DEMO_CODE:
             raise HTTPException(
@@ -144,12 +159,20 @@ async def verify_otp_endpoint(
         user = (
             await db.execute(select(User).where(User.email == email))
         ).scalars().first()
-        if not user or not user.is_fake:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Demo user not seeded — run: python -m scripts.seed_demo",
-            )
-        return await _auth_out(db, user)
+        if is_demo_email(email):
+            if not user or not user.is_fake:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Demo user not seeded — run: python -m scripts.seed_demo",
+                )
+            return await _auth_out(db, user)
+        if is_malgrat_qa_email(email):
+            if not user or user.is_fake:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Malgrat QA user not seeded — run: python -m scripts.seed",
+                )
+            return await _auth_out(db, user)
 
     now = datetime.now(timezone.utc)
 
@@ -236,6 +259,7 @@ async def verify_otp_endpoint(
             user.shop_id = shop.id
             await assign_user_to_town(db, user, shop.town_id)
         shop.status = "active"
+        await convert_business_activation(db, user=user, shop=shop)
     elif is_new:
         user = User(
             email=email,
@@ -248,6 +272,15 @@ async def verify_otp_endpoint(
         await db.flush()
         grant_welcome = True
 
+    if user is not None:
+        await apply_invitee_postal_code(
+            db, user, payload.postal_code
+        )
+
+    invite_code = (payload.invite_code or "").strip().lower() or (
+        otp.invite_code if otp else None
+    )
+
     points_awarded: int | None = None
     points_award_message: str | None = None
     if grant_welcome and user is not None:
@@ -255,6 +288,8 @@ async def verify_otp_endpoint(
         if grant.points > 0:
             points_awarded = grant.points
             points_award_message = grant.message
+        if is_new and shop is None:
+            await convert_person_signup(db, user=user, invite_code=invite_code)
 
     await db.commit()
     return await _auth_out(

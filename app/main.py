@@ -11,6 +11,7 @@ from slowapi.errors import RateLimitExceeded
 from app.api import (
     actions,
     auth,
+    invites,
     payments,
     points,
     promotions,
@@ -45,7 +46,7 @@ app = FastAPI(
     version="0.2.0",
     description=(
         "Backend KM0 LAB: auth OTP, towns, shops, promotions, "
-        "point actions, rewards, redemptions, QR scans."
+        "point actions, rewards, redemptions, QR scans, invitations."
     ),
     lifespan=lifespan,
 )
@@ -78,8 +79,10 @@ for module in (
     scans,
     residents,
     stats,
+    invites,
 ):
     app.include_router(module.router, prefix=API_V1)
+app.include_router(invites.admin_router, prefix=API_V1)
 
 
 @app.get(f"{API_V1}/health", tags=["health"])

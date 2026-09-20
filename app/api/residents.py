@@ -14,6 +14,14 @@ from app.services.towns import load_user_with_town
 router = APIRouter(prefix="/residents", tags=["residents"])
 
 
+def _admin_resident_out(resident: User) -> ResidentOut:
+    """Admin always sees email; phone stays opt-in via contact_shared."""
+    item = ResidentOut.model_validate(resident)
+    item.email = resident.email
+    item.phone = resident.phone if resident.contact_shared else None
+    return item
+
+
 @router.get("", response_model=list[ResidentOut])
 async def list_residents(
     q: str | None = None,
@@ -43,17 +51,7 @@ async def list_residents(
         )
     stmt = stmt.order_by(User.created_at.desc())
     rows = (await db.execute(stmt)).scalars().unique().all()
-    out: list[ResidentOut] = []
-    for r in rows:
-        item = ResidentOut.model_validate(r)
-        if r.contact_shared:
-            item.email = r.email
-            item.phone = r.phone
-        else:
-            item.email = None
-            item.phone = None
-        out.append(item)
-    return out
+    return [_admin_resident_out(r) for r in rows]
 
 
 @router.get("/{resident_id}", response_model=ResidentOut)
@@ -71,13 +69,7 @@ async def get_resident(
         or resident.is_fake != user.is_fake
     ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Resident not found")
-    item = ResidentOut.model_validate(resident)
-    if resident.contact_shared:
-        item.email = resident.email
-        item.phone = resident.phone
-    else:
-        item.email = None
-        item.phone = None
+    item = _admin_resident_out(resident)
     if include_activity:
         txs = (
             await db.execute(

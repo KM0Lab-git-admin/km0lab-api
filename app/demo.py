@@ -27,6 +27,22 @@ DEMO_EMAILS: frozenset[str] = frozenset(
     }
 )
 
+# Malgrat real (08380, is_fake=false). OTP 123456 in development/staging only.
+# Not DEMO_EMAILS: those stay on the Demo KM0 fake partition.
+ADMIN_MALGRAT_EMAIL = "admin-malgrat@km0lab.com"
+MERCHANT1_MALGRAT_EMAIL = "merchant1-malgrat@km0lab.com"
+MERCHANT2_MALGRAT_EMAIL = "merchant2-malgrat@km0lab.com"
+
+MALGRAT_QA_EMAILS: frozenset[str] = frozenset(
+    {
+        ADMIN_MALGRAT_EMAIL,
+        MERCHANT1_MALGRAT_EMAIL,
+        MERCHANT2_MALGRAT_EMAIL,
+    }
+)
+
+FIXED_OTP_EMAILS: frozenset[str] = DEMO_EMAILS | MALGRAT_QA_EMAILS
+
 DEMO_ROLES: dict[str, list[str]] = {
     DEMO_RESIDENT_EMAIL: [ROLE_RESIDENT],
     DEMO_MERCHANT_EMAIL: [ROLE_RESIDENT, ROLE_MERCHANT],
@@ -42,6 +58,15 @@ def demo_enabled() -> bool:
 
 def is_demo_email(email: str) -> bool:
     return email.lower().strip() in DEMO_EMAILS
+
+
+def is_malgrat_qa_email(email: str) -> bool:
+    return email.lower().strip() in MALGRAT_QA_EMAILS
+
+
+def is_fixed_otp_email(email: str) -> bool:
+    """123456 bypass (dev/staging). Demo partition + Malgrat QA."""
+    return email.lower().strip() in FIXED_OTP_EMAILS
 
 
 def is_demo_postal_code(postal_code: str | None) -> bool:

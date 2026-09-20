@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     otp_ttl_minutes: int = 10
     otp_length: int = 6
     welcome_points: int = 100  # puntos de bienvenida al registrarse
+    invite_person_points: int = 100
+    invite_business_points: int = 500
 
     # Email: preferir Resend HTTP (RESEND_API_KEY). SMTP queda como fallback.
     # Sin key ni SMTP_HOST → el OTP se imprime en log (útil en local/UAT).

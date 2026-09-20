@@ -8,16 +8,17 @@ from fastapi import (
     File,
     HTTPException,
     Query,
+    Request,
     UploadFile,
     status,
 )
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.db import get_db
 from app.demo import resolve_public_demo, sync_user_fake_partition
 from app.deps import (
-    ROLE_RESIDENT,
     assert_shop_scope,
     assert_town_scope,
     get_current_user,
@@ -27,6 +28,14 @@ from app.deps import (
 )
 from app.catalog.i18n import DEFAULT_LANG, normalize_lang, resolve_i18n
 from app.models import QrScan, Shop, Town, User
+from app.ratelimit import limiter
+from app.roles import (
+    ROLE_ADMIN,
+    ROLE_MERCHANT,
+    ROLE_RESIDENT,
+    IncompatibleRolesError,
+    flags_from_roles,
+)
 from app.schemas import (
     QrOut,
     ShopCreate,
@@ -35,6 +44,7 @@ from app.schemas import (
     ShopProfileUpdate,
     ShopUpdate,
 )
+from app.schemas.invites import ShopPublicSignupIn, ShopPublicSignupOut
 from app.schemas.shops import ShopMediaOut
 from app.services.action_grants import ACTION_TYPE_QR_SCAN, find_active_action
 from app.services.i18n_fields import apply_text_i18n
@@ -48,6 +58,7 @@ from app.services.shop_media import (
     upsert_shop_media,
 )
 from app.services.shop_qr import build_scan_url, ensure_shop_qr, qr_png_url
+from app.services.invitations import attach_business_conversion, convert_business_activation
 from app.services.towns import get_postal_code
 
 router = APIRouter(prefix="/shops", tags=["shops"])
@@ -199,6 +210,105 @@ async def list_shops_public(
     return [
         await _shop_out(db, s, lang=lang, fallback_lang=fallback) for s in rows
     ]
+
+
+def _public_signup_limit() -> str:
+    env = get_settings().environment.lower().strip()
+    return "30/hour" if env in {"development", "staging"} else "10/hour"
+
+
+@router.post("/public-signup", response_model=ShopPublicSignupOut)
+@limiter.limit(_public_signup_limit)
+async def public_shop_signup(
+    request: Request,
+    payload: ShopPublicSignupIn,
+    user: User | None = Depends(get_optional_user),
+    db: AsyncSession = Depends(get_db),
+):
+    postal = await get_postal_code(db, payload.postal_code.strip())
+    if postal is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Unknown postal code")
+    town = await db.get(Town, postal.town_id)
+    if town is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Unknown postal code")
+
+    if user is not None:
+        if user.has_role(ROLE_ADMIN):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, detail="Admin cannot also be merchant"
+            )
+        if user.has_role(ROLE_MERCHANT) or user.shop_id:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail="Merchant already has a shop",
+            )
+
+    email = payload.contact_email.lower()
+    duplicate = (
+        await db.execute(
+            select(Shop).where(
+                Shop.town_id == postal.town_id,
+                Shop.contact_email == email,
+                Shop.status.in_(("pending", "active")),
+                Shop.is_fake.is_(False),
+            )
+        )
+    ).scalars().first()
+    if duplicate:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, detail="Shop already registered for this email"
+        )
+
+    categories = await resolve_category_slugs(db, payload.categories)
+    shop = Shop(
+        town_id=postal.town_id,
+        name=payload.name.strip(),
+        categories=categories,
+        contact_email=email,
+        tax_id=payload.tax_id.strip(),
+        visit_points=town.default_visit_points if town else 10,
+        address=payload.address,
+        postal_code=payload.postal_code.strip(),
+        phone=payload.phone,
+        website=payload.website,
+        description=payload.description,
+        status="pending",
+        is_fake=False,
+    )
+    db.add(shop)
+    await db.flush()
+    await ensure_shop_qr(db, shop)
+    await attach_business_conversion(db, shop=shop, invite_code=payload.invite_code)
+
+    needs_otp = True
+    if (
+        user is not None
+        and not user.has_role(ROLE_MERCHANT)
+        and user.email.lower() == email
+    ):
+        try:
+            user.set_roles(list({*user.roles, ROLE_RESIDENT, ROLE_MERCHANT}))
+        except IncompatibleRolesError as exc:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            ) from exc
+        user.shop_id = shop.id
+        shop.status = "active"
+        await convert_business_activation(db, user=user, shop=shop)
+        needs_otp = False
+
+    await db.commit()
+    return ShopPublicSignupOut(
+        shop_id=shop.id,
+        status=shop.status,
+        contact_email=email,
+        needs_otp=needs_otp,
+        message=(
+            "Shop activated"
+            if not needs_otp
+            else "Shop created. Verify the contact email with OTP to activate."
+        ),
+    )
 
 
 async def _resident_shop_catalog(
@@ -395,6 +505,7 @@ async def create_shop(
         emoji=payload.emoji,
         categories=categories,
         contact_email=payload.contact_email.lower(),
+        tax_id=payload.tax_id,
         visit_points=visit_points,
         address=payload.address,
         postal_code=payload.postal_code,

@@ -18,6 +18,7 @@ class ShopOut(BaseModel):
     has_hero: bool = False
     categories: list[str]
     contact_email: str
+    tax_id: str | None = None
     visit_points: int
     address: str | None
     postal_code: str | None
@@ -41,6 +42,7 @@ class ShopCreate(BaseModel):
     emoji: str | None = None
     categories: list[str] = Field(default_factory=list)
     contact_email: EmailStr
+    tax_id: str | None = Field(default=None, max_length=32)
     visit_points: int | None = Field(default=None, ge=0)
     address: str | None = None
     postal_code: str | None = None
