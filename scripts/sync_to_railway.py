@@ -22,6 +22,12 @@ from pymysql.constants import CLIENT
 
 from app.config import get_settings
 
+# Consola Windows (cp1252): sustituye caracteres no imprimibles (−, ✓…) en
+# vez de romper con UnicodeEncodeError a mitad del sync.
+if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
+    sys.stdout.reconfigure(errors="replace")
+    sys.stderr.reconfigure(errors="replace")
+
 
 def parse_db_url(url: str) -> dict:
     if "+" in url.split("://", 1)[0]:
