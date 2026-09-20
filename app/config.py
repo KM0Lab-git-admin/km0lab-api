@@ -41,13 +41,18 @@ class Settings(BaseSettings):
 
     # CORS: orígenes del frontend, separados por coma
     cors_origins: str = (
-        "http://localhost:5173,http://localhost:5174,http://localhost:3000,"
-        "http://localhost:8080,http://localhost:8081,http://localhost:8082,"
-        "http://127.0.0.1:5173,http://127.0.0.1:5174,http://127.0.0.1:3000,"
-        "http://127.0.0.1:8080,http://127.0.0.1:8081,http://127.0.0.1:8082"
+        "http://localhost:5173,http://localhost:5174,http://localhost:5175,"
+        "http://localhost:3000,http://localhost:8080,http://localhost:8081,"
+        "http://localhost:8082,http://127.0.0.1:5173,http://127.0.0.1:5174,"
+        "http://127.0.0.1:5175,http://127.0.0.1:3000,http://127.0.0.1:8080,"
+        "http://127.0.0.1:8081,http://127.0.0.1:8082"
     )
-    # UAT/prod frontends even if CORS_ORIGINS env is stale or incomplete.
-    cors_origin_regex: str = r"https://([a-z0-9-]+\.)*km0lab\.com"
+    # UAT/prod + Vite local en cualquier puerto (5173/5174/5175…).
+    cors_origin_regex: str = (
+        r"https://([a-z0-9-]+\.)*km0lab\.com"
+        r"|http://localhost:\d+"
+        r"|http://127\.0\.0\.1:\d+"
+    )
 
     # Deep-link encoded in shop QR PNGs (app extracts ?c=token)
     qr_scan_base_url: str = "https://app.km0lab.com/scan"
