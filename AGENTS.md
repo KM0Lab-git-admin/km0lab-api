@@ -98,6 +98,36 @@ postal (`name`, `art_url`…) y añade `municipality_*` y `localities`.
 Dar de alta un pueblo: `scripts/add_town.py`. Agrupar varios en un
 municipio: `scripts/group_towns.py` (sin `--apply` solo enseña; se niega si
 alguno ya tiene premios, canjes, movimientos o administrador propios).
+Dar de alta a su administrador: `scripts/add_admin.py` (una cuenta por
+municipio; entra con su correo y el código, sin contraseña).
+
+Al crear un comercio la API decide su población: la que se le diga
+(`locality_id`), o la del código postal del comercio, o la única que haya.
+Con varias poblaciones y sin ninguna pista contesta 422 `locality_required`:
+no se adivina. `GET /towns/me` devuelve `localities` para que el backoffice
+las ofrezca.
+
+## Catálogo de premios
+
+El catálogo es **uno y el mismo para todos los municipios**. Se edita en un
+solo sitio, Demo KM0 (CP 00000, partición `is_fake`), con el backoffice y
+la cuenta de demostración. Cada municipio real tiene una copia.
+
+- **El administrador de un municipio solo enciende y apaga.** Sobre un
+  premio real, `PATCH /rewards/{id}` admite únicamente `status` con
+  `active` o `inactive`. Crear, borrar, cambiar puntos, textos, existencias
+  o imagen contesta 403 `reward_catalog_locked`. `RewardOut.content_locked`
+  se lo dice al backoffice.
+- **La copia la hace `scripts/seed_real_rewards.py`** (`--town` o `--all`;
+  sin `--apply` solo enseña). Un premio nuevo nace **inactivo**; uno que ya
+  estaba recibe textos, puntos e imagen del catálogo y **conserva su estado
+  y sus existencias**; uno que ya no está en el catálogo se borra si nadie
+  lo canjeó y, si no, se queda apagado; uno que no viene del catálogo no se
+  toca. Mira siempre la salida sin `--apply`: avisa de cada cambio de puntos.
+- La copia se reconoce por `rewards.catalog_id`, así que renombrar un
+  premio del catálogo renombra sus copias en vez de duplicarlas.
+- Las acciones de puntos **no** son del catálogo: cada municipio configura
+  las suyas.
 
 ## Versiones y compatibilidad
 
