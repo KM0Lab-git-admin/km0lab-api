@@ -1,0 +1,2 @@
+# Los ganchos de git son guiones de shell: siempre con saltos de línea LF.
+.githooks/* text eol=lf

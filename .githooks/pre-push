@@ -1,0 +1,32 @@
+#!/bin/sh
+# Tramo rápido de km0lab-api: lo que corre en tu máquina antes de que algo
+# salga de ella. Solo al subir develop o main (develop publica en UAT).
+#
+# Son las pruebas de pytest: usan SQLite en memoria, no necesitan MySQL ni
+# nada arrancado, y tardan unos 15 segundos. Las pruebas lentas (migraciones
+# y flujos sobre MySQL) corren después en GitHub: .github/workflows/tests.yml
+#
+# Se activa una vez por copia del repositorio:
+#     git config core.hooksPath .githooks
+# Para saltarlo puntualmente:  git push --no-verify
+
+run=0
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  case "$remote_ref" in
+    refs/heads/develop | refs/heads/main) run=1 ;;
+  esac
+done
+
+[ "$run" -eq 1 ] || exit 0
+
+echo "km0lab-api · pruebas rápidas antes de subir…"
+out=$(python -m pytest -q -x -p no:cacheprovider 2>&1)
+status=$?
+if [ "$status" -ne 0 ]; then
+  echo "$out" | tail -n 25
+  echo ""
+  echo "NO SE SUBE: hay pruebas que fallan (arriba). Arréglalas o usa --no-verify."
+  exit 1
+fi
+echo "$out" | tail -n 1
+echo "Pruebas rápidas: PASA"

@@ -88,6 +88,21 @@ Rama de trabajo `develop` (despliega a UAT). `main` es producción y solo
 recibe merges decididos por una persona. Conventional Commits con subject
 de 50 caracteres como máximo. Sin `--amend` ni `--force` salvo petición.
 
+## Qué se prueba y cuándo
+
+Dos tramos, para no frenar el trabajo diario:
+
+- **Rápido, en tu máquina.** Al subir `develop` o `main`, el gancho
+  `.githooks/pre-push` lanza `pytest` (unos 15 segundos, sin MySQL). Si
+  falla, no se sube. Se activa una vez por copia del repositorio:
+  `git config core.hooksPath .githooks`.
+- **Lento, en GitHub, ya subido.** `.github/workflows/tests.yml` repite
+  `pytest` y añade las migraciones desde cero y los flujos sobre MySQL.
+  No bloquea el despliegue de UAT: avisa.
+
+`python -m scripts.check_flows_mysql` se puede lanzar en local a mano
+cuando el cambio toca puntos, canjes o la base de datos.
+
 ## Antes de cerrar una tarea
 
 - [ ] `pytest` en verde.
