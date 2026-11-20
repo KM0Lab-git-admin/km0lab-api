@@ -15,7 +15,8 @@ from app.demo import (
     is_demo_postal_code,
     sync_user_fake_partition,
 )
-from app.models import Town, TownPostalCode, User
+from app.models import Locality, Town, TownPostalCode, User
+from app.utils.slug import slugify
 
 
 async def get_postal_code(db: AsyncSession, postal_code: str) -> TownPostalCode | None:
@@ -84,6 +85,34 @@ async def get_town_by_slug(db: AsyncSession, slug: str) -> Town | None:
     return (
         await db.execute(select(Town).where(Town.slug == slug))
     ).scalars().first()
+
+
+async def find_municipality(db: AsyncSession, ref: str) -> Town | None:
+    """A municipality from what a person would type in a script.
+
+    One of its postal codes, its slug or name, or the name of one of its
+    towns ("Breda" finds the municipality Breda belongs to).
+    """
+    ref = ref.strip()
+    if not ref:
+        return None
+    postal = await get_postal_code(db, ref)
+    if postal is not None:
+        return await db.get(Town, postal.town_id)
+    slug = slugify(ref)
+    town = (
+        await db.execute(
+            select(Town).where((Town.slug == slug) | (Town.name == ref))
+        )
+    ).scalars().first()
+    if town is not None:
+        return town
+    locality = (
+        await db.execute(
+            select(Locality).where((Locality.slug == slug) | (Locality.name == ref))
+        )
+    ).scalars().first()
+    return await db.get(Town, locality.town_id) if locality is not None else None
 
 
 async def ensure_demo_town(db: AsyncSession) -> Town:

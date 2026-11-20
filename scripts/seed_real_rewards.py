@@ -1,105 +1,136 @@
-"""Mirror the demo catalog onto real towns (Malgrat 08380, Blanes, Lloret).
+"""Copy the reward catalog to real municipalities.
 
 Usage (from repo root):
 
-    python -m scripts.seed_real_rewards
-    python -m scripts.seed_real_rewards --railway
+    python -m scripts.seed_real_rewards --town "Baix Montseny"
+    python -m scripts.seed_real_rewards --town "Baix Montseny" --apply
+    python -m scripts.seed_real_rewards --all
+    python -m scripts.seed_real_rewards --town 08380 --target railway --apply
 
-``--railway`` uses RAILWAY_DB_URL from .env (or the environment). It does
-not drop tables or copy the local database.
+The catalog is edited once, in Demo KM0 (CP 00000), and is the same for
+every municipality. This copies it:
+
+- a reward the municipality does not have yet is created **inactive**: its
+  administrator switches it on from the backoffice;
+- a reward it already has gets the catalog's texts, points and image, and
+  **keeps its status and its stock**;
+- a copy whose catalog reward is gone is deleted if nobody redeemed it,
+  otherwise kept and switched off;
+- a reward that is not a copy of the catalog is listed and left alone.
+
+``--town`` is a municipality: name, slug, the name of one of its towns or
+a postal code. ``--all`` does every real municipality.
+
+Without --apply it only shows what it would do. With --target railway it
+writes to UAT, so it only runs when the user asks to publish.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 import sys
 from pathlib import Path
-from urllib.parse import unquote, urlparse
 
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-
-def _read_railway_url() -> str:
-    env = (os.environ.get("RAILWAY_DB_URL") or "").strip()
-    if env:
-        return env
-    env_path = _ROOT / ".env"
-    if not env_path.is_file():
-        return ""
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if stripped.startswith("RAILWAY_DB_URL="):
-            return stripped.split("=", 1)[1].strip().strip('"').strip("'")
-    return ""
+from scripts._target import TARGETS, point_at  # noqa: E402
 
 
-def _apply_railway_env() -> None:
-    url = _read_railway_url()
-    if not url:
-        raise SystemExit("RAILWAY_DB_URL no está definido en el entorno ni en .env")
-    parsed = urlparse(url)
-    if parsed.scheme.split("+", 1)[0] != "mysql" or not parsed.hostname:
-        raise SystemExit("RAILWAY_DB_URL no es una URL MySQL válida")
-    os.environ["DB_HOST"] = parsed.hostname
-    os.environ["DB_PORT"] = str(parsed.port or 3306)
-    os.environ["DB_USER"] = unquote(parsed.username or "")
-    os.environ["DB_PASSWORD"] = unquote(parsed.password or "")
-    os.environ["DB_NAME"] = parsed.path.lstrip("/")
-    print(
-        f"Destino: {parsed.hostname}:{parsed.port or 3306}/{parsed.path.lstrip('/')}"
-    )
+def _print(town_name: str, report) -> None:
+    def show(label: str, names: list[str]) -> None:
+        if names:
+            print(f"  {town_name}: {label} ({len(names)}): {', '.join(names)}")
+
+    show("new, inactive until the admin switches them on", report.created)
+    show("already there, status and stock kept", report.updated)
+    for old, new in report.renamed:
+        print(f"  {town_name}: renamed '{old}' -> '{new}'")
+    for change in report.changed:
+        print(f"  {town_name}: CHANGES {change}")
+    show("gone from the catalog, redeemed: kept and switched off", report.retired)
+    show("gone from the catalog, never redeemed: deleted", report.deleted)
+    show("not from the catalog, left alone", report.untouched)
+    if not (report.created or report.updated or report.untouched):
+        print(f"  {town_name}: nothing to do")
 
 
-async def _run() -> None:
+async def _run(args: argparse.Namespace) -> int:
     from sqlalchemy import select
 
-    from app.catalog.rewards import seed_real_rewards
+    from app.catalog.rewards import sync_catalog_rewards
     from app.db import SessionLocal
-    from app.models import Shop, Town
-    from app.services.towns import ensure_demo_town
+    from app.demo import is_fake_postal_code
+    from app.models import Shop, Town, TownPostalCode
+    from app.services.towns import ensure_demo_town, find_municipality
 
     async with SessionLocal() as db:
         demo = await ensure_demo_town(db)
-        towns = (await db.execute(select(Town))).scalars().all()
-        real_towns = [t for t in towns if t.id != demo.id and t.slug != demo.slug]
-        if not real_towns:
-            print("No hay pueblos reales. Ejecuta primero: python -m scripts.seed")
-            return
-        for town in real_towns:
+        if args.town:
+            town = await find_municipality(db, args.town)
+            if town is None:
+                print(f"  REFUSED: no municipality matches '{args.town}'.")
+                return 1
+            towns = [town]
+        else:
+            towns = list(
+                (await db.execute(select(Town).order_by(Town.name))).scalars().all()
+            )
+
+        done = 0
+        for town in towns:
+            codes = (
+                await db.execute(
+                    select(TownPostalCode.postal_code).where(
+                        TownPostalCode.town_id == town.id
+                    )
+                )
+            ).scalars().all()
+            # The catalog itself and the test territory are not destinations.
+            if town.id == demo.id or any(is_fake_postal_code(c) for c in codes):
+                if args.town:
+                    print(f"  REFUSED: {town.name} is a demo or test territory.")
+                    return 1
+                continue
             shop_id = (
                 await db.execute(
                     select(Shop.id).where(
-                        Shop.town_id == town.id,
-                        Shop.is_fake.is_(False),
+                        Shop.town_id == town.id, Shop.is_fake.is_(False)
                     )
                 )
             ).scalars().first()
-            count = await seed_real_rewards(
-                db, town_id=town.id, shop_id=shop_id
-            )
-            print(f"  {town.name}: {count} premios reales")
-        await db.commit()
-        print("Listo.")
+            report = await sync_catalog_rewards(db, town_id=town.id, shop_id=shop_id)
+            _print(town.name, report)
+            done += 1
+
+        if not done:
+            print("  No real municipality found.")
+        if args.apply:
+            await db.commit()
+        else:
+            await db.rollback()
+            print("  Nothing written: run again with --apply.")
+    return 0
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Copia el catálogo demo a los pueblos reales"
-    )
-    parser.add_argument(
-        "--railway",
-        action="store_true",
-        help="Usar RAILWAY_DB_URL en lugar de la BD local",
-    )
-    args = parser.parse_args()
-    if args.railway:
-        _apply_railway_env()
-    asyncio.run(_run())
+async def main(args: argparse.Namespace) -> int:
+    from app.db import engine
+
+    try:
+        return await _run(args)
+    finally:
+        await engine.dispose()
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    which = parser.add_mutually_exclusive_group(required=True)
+    which.add_argument("--town", default=None)
+    which.add_argument("--all", action="store_true")
+    parser.add_argument("--target", choices=TARGETS, default="local")
+    parser.add_argument("--apply", action="store_true")
+    parsed = parser.parse_args()
+    print(f"Database: {point_at(parsed.target)}")
+    raise SystemExit(asyncio.run(main(parsed)))

@@ -15,6 +15,7 @@ from sqlalchemy import select
 from app.config import get_settings
 from app.db import SessionLocal
 from app.models import (
+    Reward,
     Shop,
     ShopCategory,
     Town,
@@ -135,7 +136,19 @@ async def seed() -> None:
                         )
                     )
                 ).scalars().first()
-                r = await seed_real_rewards(db, town_id=town.id, shop_id=shop_id)
+                first_time = (
+                    await db.execute(
+                        select(Reward.id).where(
+                            Reward.town_id == town.id,
+                            Reward.is_fake.is_(False),
+                        )
+                    )
+                ).scalars().first() is None
+                # A municipality that already has rewards keeps the status
+                # its admin chose; only a brand-new local one starts active.
+                r = await seed_real_rewards(
+                    db, town_id=town.id, shop_id=shop_id, activate_new=first_time
+                )
                 print(f"Real rewards ensured for {town.name}: {r}")
             await db.commit()
             try:
@@ -260,7 +273,10 @@ async def _seed_town(db, spec) -> None:
         )
 
     await ensure_town_point_actions(db, town.id, is_fake=False)
-    await seed_real_rewards(db, town_id=town.id, shop_id=shop.id)
+    # New local town: start with the catalog switched on, as the pilot has it.
+    await seed_real_rewards(
+        db, town_id=town.id, shop_id=shop.id, activate_new=True
+    )
 
 
 if __name__ == "__main__":

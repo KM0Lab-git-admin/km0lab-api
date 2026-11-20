@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
@@ -319,23 +320,59 @@ async def _mirror_demo_media(
     await db.flush()
 
 
-async def seed_real_rewards(
+@dataclass
+class CatalogSyncReport:
+    """What copying the catalog did (or would do) to one municipality."""
+
+    created: list[str] = field(default_factory=list)
+    updated: list[str] = field(default_factory=list)
+    renamed: list[tuple[str, str]] = field(default_factory=list)
+    # What a resident would notice in a reward the municipality already
+    # has: "name: points 1000 -> 80". Texts and image are not listed.
+    changed: list[str] = field(default_factory=list)
+    # Copies whose catalog reward no longer exists.
+    retired: list[str] = field(default_factory=list)  # redeemed: kept, off
+    deleted: list[str] = field(default_factory=list)  # never redeemed
+    # Rewards of the municipality that are not copies of the catalog.
+    untouched: list[str] = field(default_factory=list)
+    new_status: str = "inactive"
+
+    @property
+    def synced(self) -> int:
+        return len(self.created) + len(self.updated)
+
+
+async def sync_catalog_rewards(
     db: AsyncSession,
     *,
     town_id: str,
     shop_id: str | None = None,
-) -> int:
-    """Mirror the demo town's fake rewards as real (is_fake=False) rows.
+    activate_new: bool = False,
+) -> CatalogSyncReport:
+    """Copy the reward catalog (Demo KM0, CP 00000) to a real municipality.
 
-    Demo KM0 (CP 00000) is the content reference: real towns serve the
-    same rewards. Rows matched by name (without the "[DEMO] " prefix)
-    are updated to mirror the demo reward; real rows absent from the
-    demo partition are deleted when no redemption references them.
-    Fresh databases seed the static catalog into the demo town first.
+    The catalog is the same for everyone; what each municipality decides is
+    which rewards it offers. So:
+
+    - A reward the municipality does not have yet is created **inactive**:
+      its admin switches it on. ``activate_new`` (local seeds only) keeps
+      the catalog's own status instead.
+    - A reward it already has gets the catalog's content (name, texts,
+      points, value, validity, image) and **keeps its status and its
+      stock**: both are the municipality's (the admin's switch, and the
+      units its residents have already redeemed).
+    - A copy whose catalog reward is gone is deleted if nobody ever
+      redeemed it; otherwise it is kept and switched off.
+    - A reward that is not a copy of the catalog is never touched.
+
+    A copy is recognised by ``catalog_id``. Rows that predate that link
+    are adopted by name the first time; after that, renaming a catalog
+    reward renames its copies instead of duplicating them.
     """
+    report = CatalogSyncReport(new_status="catalog" if activate_new else "inactive")
     demo_town = await ensure_demo_town(db)
     if town_id == demo_town.id:
-        return 0
+        return report
 
     async def _demo_rows() -> list[Reward]:
         return (
@@ -347,6 +384,7 @@ async def seed_real_rewards(
                         Reward.town_id == demo_town.id,
                         Reward.is_fake.is_(True),
                     )
+                    .order_by(Reward.name)
                 )
             )
             .scalars()
@@ -359,37 +397,68 @@ async def seed_real_rewards(
         await seed_fake_rewards(db, town_id=demo_town.id)
         demo_rows = await _demo_rows()
 
-    synced = 0
-    keep_names: set[str] = set()
+    # Media/shops eager-loaded so the ORM delete cascade needs no lazy IO.
+    existing = (
+        await db.execute(
+            select(Reward)
+            .options(selectinload(Reward.media), selectinload(Reward.shops))
+            .where(Reward.town_id == town_id, Reward.is_fake.is_(False))
+            .order_by(Reward.name)
+        )
+    ).scalars().all()
+    by_catalog = {r.catalog_id: r for r in existing if r.catalog_id}
+    by_id = {r.id: r for r in existing}
+    unlinked_by_name = {r.name: r for r in existing if not r.catalog_id}
+    matched: set[str] = set()
+
     for src in demo_rows:
         name = real_reward_name(src.name)
-        keep_names.add(name)
         rid = real_reward_id(town_id, name)
-        reward = await db.get(Reward, rid)
+        reward = by_catalog.get(src.id)
         if reward is None:
-            reward = (
-                await db.execute(
-                    select(Reward).where(
-                        Reward.is_fake.is_(False),
-                        Reward.town_id == town_id,
-                        Reward.name == name,
-                    )
-                )
-            ).scalars().first()
+            # Rows older than ``catalog_id``: adopt by stable id, then name.
+            for candidate in (by_id.get(rid), unlinked_by_name.get(name)):
+                if (
+                    candidate is not None
+                    and candidate.catalog_id is None
+                    and candidate.id not in matched
+                ):
+                    reward = candidate
+                    break
         if reward is None:
-            reward = Reward(id=rid, town_id=town_id, is_fake=False)
+            reward = Reward(
+                id=_uuid() if rid in by_id else rid,
+                town_id=town_id,
+                is_fake=False,
+                status=src.status if activate_new else "inactive",
+                stock=src.stock,
+            )
             db.add(reward)
+            report.created.append(name)
+        else:
+            if reward.name != name:
+                report.renamed.append((reward.name, name))
+            for label, old, new in (
+                ("points", reward.points_required, src.points_required),
+                ("type", reward.type, src.type),
+                ("value", reward.value, src.value),
+                ("valid from", reward.valid_from, src.valid_from),
+                ("valid until", reward.valid_until, src.valid_until),
+            ):
+                if old != new:
+                    report.changed.append(f"{name}: {label} {old} -> {new}")
+            report.updated.append(name)
+        matched.add(reward.id)
 
+        reward.catalog_id = src.id
         reward.name = name
         reward.description = src.description or ""
         reward.type = src.type
         reward.points_required = src.points_required
         reward.value = src.value
-        reward.stock = src.stock
         reward.conditions = src.conditions
         reward.valid_from = src.valid_from
         reward.valid_until = src.valid_until
-        reward.status = src.status
         reward.name_i18n = _strip_demo_prefix_i18n(src.name_i18n)
         reward.description_i18n = src.description_i18n
         reward.conditions_i18n = src.conditions_i18n
@@ -408,21 +477,12 @@ async def seed_real_rewards(
                 db.add(
                     RewardShop(id=_uuid(), reward_id=reward.id, shop_id=shop_id)
                 )
-        synced += 1
 
-    # Prune real rewards that no longer exist in the demo partition.
-    # Media/shops eager-loaded so the ORM delete cascade needs no lazy IO.
-    existing = (
-        await db.execute(
-            select(Reward)
-            .options(selectinload(Reward.media), selectinload(Reward.shops))
-            .where(
-                Reward.town_id == town_id, Reward.is_fake.is_(False)
-            )
-        )
-    ).scalars().all()
     for old in existing:
-        if old.name in keep_names:
+        if old.id in matched:
+            continue
+        if old.catalog_id is None:
+            report.untouched.append(old.name)
             continue
         has_redemption = (
             await db.execute(
@@ -430,11 +490,29 @@ async def seed_real_rewards(
             )
         ).scalars().first()
         if has_redemption is not None:
-            continue  # keep: redemption history references it
+            # Keep: redemption history references it. Just stop offering it.
+            old.status = "inactive"
+            report.retired.append(old.name)
+            continue
+        report.deleted.append(old.name)
         await db.delete(old)  # cascades reward_media + reward_shops
 
     await db.flush()
-    return synced
+    return report
+
+
+async def seed_real_rewards(
+    db: AsyncSession,
+    *,
+    town_id: str,
+    shop_id: str | None = None,
+    activate_new: bool = False,
+) -> int:
+    """``sync_catalog_rewards`` for callers that only want the count."""
+    report = await sync_catalog_rewards(
+        db, town_id=town_id, shop_id=shop_id, activate_new=activate_new
+    )
+    return report.synced
 
 
 async def _reward_for_spec(

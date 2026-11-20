@@ -38,8 +38,27 @@ _I18N_FIELDS = {
 }
 
 
+# The reward catalog is the same for every municipality: it is edited once
+# (Demo KM0, the ``is_fake`` partition) and copied to the real ones by
+# ``scripts/seed_real_rewards.py``. A real municipality's admin decides
+# only whether each reward is offered: active or inactive. Points, texts,
+# image and stock are the catalog's, and rewards are neither created nor
+# deleted from the backoffice.
+CATALOG_LOCKED = "reward_catalog_locked"
+ADMIN_STATUSES = ("active", "inactive")
+
+
+def _content_locked(is_fake: bool) -> bool:
+    return not is_fake
+
+
+def _catalog_locked() -> HTTPException:
+    return HTTPException(status.HTTP_403_FORBIDDEN, detail=CATALOG_LOCKED)
+
+
 def _to_out(reward: Reward, lang: str, fallback_lang: str) -> RewardOut:
     data = RewardOut.model_validate(reward)
+    data.content_locked = _content_locked(reward.is_fake)
     data.shop_ids = [rs.shop_id for rs in (reward.shops or [])]
     if reward.media is not None:
         data.image_url = media_public_path(reward.id, media_version(reward.media))
@@ -208,6 +227,8 @@ async def create_reward(
 ):
     if not user.town_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Admin has no town")
+    if _content_locked(user.is_fake):
+        raise _catalog_locked()
     town = await db.get(Town, user.town_id)
     default_lang = (town.default_lang if town else DEFAULT_LANG) or DEFAULT_LANG
     data = payload.model_dump(exclude={"shop_ids", "image_url", *_I18N_FIELDS})
@@ -250,6 +271,11 @@ async def update_reward(
     town = await db.get(Town, user.town_id) if user.town_id else None
     default_lang = (town.default_lang if town else DEFAULT_LANG) or DEFAULT_LANG
     data = payload.model_dump(exclude_unset=True)
+    if _content_locked(reward.is_fake):
+        # Only the switch. Sending anything else is refused rather than
+        # ignored, so a client never believes it changed the points.
+        if set(data) != {"status"} or data["status"] not in ADMIN_STATUSES:
+            raise _catalog_locked()
     data.pop("image_url", None)
     shop_ids = data.pop("shop_ids", None)
     name = data.pop("name", None)
@@ -304,6 +330,8 @@ async def upload_reward_media(
     if not reward:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Reward not found")
     _assert_admin_reward(user, reward)
+    if _content_locked(reward.is_fake):
+        raise _catalog_locked()
     row = await upsert_reward_media(db, reward_id=reward.id, upload=file)
     reward.image_url = media_public_path(reward.id, media_version(row))
     reward.updated_at = datetime.utcnow()
@@ -326,6 +354,8 @@ async def remove_reward_media(
     if not reward:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Reward not found")
     _assert_admin_reward(user, reward)
+    if _content_locked(reward.is_fake):
+        raise _catalog_locked()
     deleted = await delete_reward_media(db, reward_id=reward.id)
     if not deleted:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Media not found")
@@ -368,6 +398,8 @@ async def delete_reward(
     if not reward:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Reward not found")
     _assert_admin_reward(user, reward)
+    if _content_locked(reward.is_fake):
+        raise _catalog_locked()
 
     red_ids = (
         await db.execute(

@@ -260,6 +260,14 @@ class User(Base):
         return town.name if town is not None else None
 
     @property
+    def municipality_name(self) -> str | None:
+        """The managed scope (what an administrator administers)."""
+        if self.postal_ref is None:
+            return None
+        town = self.postal_ref.town
+        return town.name if town is not None else None
+
+    @property
     def roles(self) -> list[str]:
         from app.roles import roles_from_flags
 
@@ -510,6 +518,13 @@ class Reward(Base):
         String(20), default="active", index=True
     )  # active | inactive | sold_out
     is_fake: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # The catalog reward this row is a copy of (its id in the Demo KM0
+    # partition). Null on the catalog itself and on rewards that predate
+    # the link. No foreign key: retiring a catalog reward must not take
+    # the municipalities' copies (and their redemptions) with it.
+    catalog_id: Mapped[str | None] = mapped_column(
+        String(32), default=None, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )

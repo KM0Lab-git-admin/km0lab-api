@@ -26,6 +26,10 @@ class RewardOut(BaseModel):
     status: str
     shop_ids: list[str] = Field(default_factory=list)  # empty = all shops
     is_fake: bool = False
+    # Copy of a shared catalog reward: the municipality's admin may only
+    # switch it on and off (PATCH with nothing but ``status``).
+    content_locked: bool = False
+    catalog_id: str | None = None
     created_at: datetime
     updated_at: datetime
 
