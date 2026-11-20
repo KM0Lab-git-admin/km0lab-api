@@ -17,7 +17,7 @@ from app.schemas import (
     RedemptionUseIn,
     RedemptionValidateIn,
 )
-from app.services.points import apply_points
+from app.services.points import apply_points, lock_user_points
 from app.services.towns import assign_user_to_town
 from app.services.voucher_codes import allocate_voucher_code
 
@@ -74,7 +74,11 @@ async def create_redemption(
     user: User = Depends(require_resident),
     db: AsyncSession = Depends(get_db),
 ):
-    reward = await db.get(Reward, payload.reward_id)
+    await lock_user_points(db, user)
+    # Locked too, so the last unit in stock cannot be redeemed twice.
+    reward = await db.get(
+        Reward, payload.reward_id, with_for_update=True, populate_existing=True
+    )
     if (
         not reward
         or reward.status != "active"

@@ -15,7 +15,7 @@ from app.deps import require_resident
 from app.models import QrScan, Shop, Town, User
 from app.schemas import ScanIn, ScanOut
 from app.services.action_grants import ACTION_TYPE_QR_SCAN, find_active_action
-from app.services.points import apply_points
+from app.services.points import apply_points, lock_user_points
 from app.services.towns import assign_user_to_town
 
 router = APIRouter(prefix="/scans", tags=["scans"])
@@ -39,6 +39,7 @@ async def scan_qr(
     user: User = Depends(require_resident),
     db: AsyncSession = Depends(get_db),
 ):
+    await lock_user_points(db, user)
     shop = (
         await db.execute(
             select(Shop).where(
@@ -82,6 +83,8 @@ async def scan_qr(
             .where(QrScan.user_id == user.id, QrScan.shop_id == shop.id)
             .order_by(QrScan.created_at.desc())
             .limit(1)
+            # Locking read: sees a scan committed by a concurrent request.
+            .with_for_update()
         )
     ).scalars().first()
 
