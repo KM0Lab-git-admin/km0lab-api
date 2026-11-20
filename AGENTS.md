@@ -82,6 +82,23 @@ python -m scripts.check_flows_mysql  # flujos y concurrencia contra MySQL local
     hace sus comprobaciones con lecturas `with_for_update`. SQLite no lo
     detecta: se verifica con `scripts/check_flows_mysql.py`.
 
+## Municipio y poblaciones
+
+- **Municipio** (`towns`): el cliente. Un administrador, unas reglas de
+  puntos, unas acciones y unos premios, **compartidos** por todas sus
+  poblaciones. Su nombre no se enseña en la app.
+- **Población** (`localities`): lo que el vecino llama «mi pueblo». Tiene
+  nombre, códigos postales e ilustración. Un comercio es de una población.
+  Dos poblaciones no comparten código postal.
+
+Un municipio de un solo pueblo tiene una población con su mismo nombre.
+`GET /towns/public?postal_code=` contesta desde la población de ese código
+postal (`name`, `art_url`…) y añade `municipality_*` y `localities`.
+
+Dar de alta un pueblo: `scripts/add_town.py`. Agrupar varios en un
+municipio: `scripts/group_towns.py` (sin `--apply` solo enseña; se niega si
+alguno ya tiene premios, canjes, movimientos o administrador propios).
+
 ## Versiones y compatibilidad
 
 La versión del producto está en el fichero `VERSION` de la raíz. **No se

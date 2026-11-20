@@ -5,6 +5,7 @@ from app.schemas.auth import AuthOut, MessageOut, RequestOtpIn, VerifyOtpIn, Use
 from app.schemas.towns import (
     TownOut,
     TownPublicOut,
+    LocalityOut,
     TownUpdate,
     TownPostalCodeOut,
     TownPostalCodeCreate,

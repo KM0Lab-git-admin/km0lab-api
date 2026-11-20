@@ -23,6 +23,7 @@ from app.models import (
     InvitationConversion,
     InvitationEvent,
     InvitationLink,
+    Locality,
     OtpCode,
     PointAction,
     PointsTransaction,
@@ -423,6 +424,13 @@ async def purge_qa_territory(
         await db.execute(
             delete(TownMedia).where(TownMedia.town_id.in_(town_ids))
         )
+        # Postal codes and shops point at the localities: free them first.
+        await db.execute(
+            update(TownPostalCode)
+            .where(TownPostalCode.town_id.in_(town_ids))
+            .values(locality_id=None)
+        )
+        await db.execute(delete(Locality).where(Locality.town_id.in_(town_ids)))
         await db.execute(
             delete(TownPostalCode).where(TownPostalCode.town_id.in_(town_ids))
         )

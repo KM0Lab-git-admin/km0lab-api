@@ -71,6 +71,69 @@ class Town(Base):
         cascade="all, delete-orphan",
         lazy="selectin",
     )
+    localities: Mapped[list["Locality"]] = relationship(
+        "Locality", back_populates="town", cascade="all, delete-orphan"
+    )
+
+
+class Locality(Base):
+    """A town (població) inside a municipality.
+
+    ``towns`` is the managed scope — the client: one admin, one set of point
+    rules, actions and rewards, shared by all its localities. A locality is
+    what a resident calls "my town": it has the name they see, its postal
+    codes and its illustration. Shops belong to one.
+
+    A municipality that is a single town has exactly one locality with its
+    own name. Two localities never share a postal code.
+    """
+
+    __tablename__ = "localities"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    town_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("towns.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(120))
+    slug: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    town: Mapped["Town"] = relationship("Town", back_populates="localities")
+    postal_codes: Mapped[list["TownPostalCode"]] = relationship(
+        "TownPostalCode", back_populates="locality"
+    )
+
+
+class LocalityMedia(Base):
+    """Binary assets of a locality (its illustration, kind ``art``)."""
+
+    __tablename__ = "locality_media"
+    __table_args__ = (
+        UniqueConstraint("locality_id", "kind", name="uq_locality_media_kind"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    locality_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("localities.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(20))  # art
+    content_type: Mapped[str] = mapped_column(String(64))
+    data: Mapped[bytes] = mapped_column(
+        LargeBinary().with_variant(LONGBLOB(), "mysql"),
+        nullable=False,
+    )
+    byte_size: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
 
 
 class TownMedia(Base):
@@ -112,11 +175,22 @@ class TownPostalCode(Base):
         String(32), ForeignKey("towns.id", ondelete="CASCADE"), index=True
     )
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+    # The town (locality) this postal code belongs to. Null only for rows
+    # created before localities existed and not yet repaired.
+    locality_id: Mapped[str | None] = mapped_column(
+        String(32),
+        ForeignKey("localities.id", ondelete="SET NULL"),
+        default=None,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
 
     town: Mapped[Town] = relationship("Town", back_populates="postal_codes")
+    locality: Mapped["Locality | None"] = relationship(
+        "Locality", back_populates="postal_codes", lazy="selectin"
+    )
 
 
 class User(Base):
@@ -176,8 +250,12 @@ class User(Base):
 
     @property
     def town_name(self) -> str | None:
+        """What the resident calls "my town": the locality, not the scope."""
         if self.postal_ref is None:
             return None
+        locality = self.postal_ref.locality
+        if locality is not None:
+            return locality.name
         town = self.postal_ref.town
         return town.name if town is not None else None
 
@@ -278,6 +356,13 @@ class Shop(Base):
     qr_code: Mapped[str | None] = mapped_column(
         String(64), unique=True, default=None, index=True
     )
+    # A shop is in one town of the municipality (the catalog is shared).
+    locality_id: Mapped[str | None] = mapped_column(
+        String(32),
+        ForeignKey("localities.id", ondelete="SET NULL"),
+        default=None,
+        index=True,
+    )
     is_fake: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
@@ -286,6 +371,9 @@ class Shop(Base):
         DateTime, server_default=func.now(), onupdate=func.now()
     )
 
+    locality: Mapped["Locality | None"] = relationship(
+        "Locality", lazy="selectin"
+    )
     media: Mapped[list["ShopMedia"]] = relationship(
         "ShopMedia", back_populates="shop", cascade="all, delete-orphan"
     )

@@ -52,11 +52,28 @@ class TownPostalCodeCreate(BaseModel):
     is_primary: bool = False
 
 
+class LocalityOut(BaseModel):
+    """A town (població) of the municipality, as the residents app sees it."""
+
+    id: str
+    name: str
+    slug: str = ""
+    postal_codes: list[str] = []
+    art_url: str | None = None
+
+
 class TownPublicOut(BaseModel):
     """Public town card for the residents app (no auth).
 
-    ``art_url`` is the illustration that identifies the town; ``None`` means
-    the app paints its generic one.
+    The card describes **the town of the postal code asked for**: ``name``,
+    ``slug``, ``postal_codes`` and ``art_url`` are the locality's, because
+    that is what a resident calls "my town". ``art_url`` is its
+    illustration; ``None`` means the app paints its generic one.
+
+    The municipality (the managed scope: point rules, actions, rewards) is
+    ``id`` / ``municipality_id`` and ``municipality_name``; the app does not
+    show its name. ``localities`` lists every town of the municipality: one
+    for a single-town municipality, several when it groups towns.
     """
 
     id: str
@@ -66,6 +83,10 @@ class TownPublicOut(BaseModel):
     logo_url: str | None = None
     has_logo: bool = False
     art_url: str | None = None
+    locality_id: str | None = None
+    municipality_id: str | None = None
+    municipality_name: str | None = None
+    localities: list[LocalityOut] = []
     points_per_euro: int = 200
     default_visit_points: int = 10
     default_lang: str = "ca"

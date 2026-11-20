@@ -72,6 +72,10 @@ async def _run(name: str, postal_codes: list[str], entity_name: str, apply: bool
         for i, code in enumerate(postal_codes):
             db.add(TownPostalCode(postal_code=code, town_id=town.id, is_primary=i == 0))
         await db.flush()
+        # The town a resident sees: one locality named like the municipality.
+        from app.services.localities import ensure_default_locality
+
+        await ensure_default_locality(db, town)
         created = await ensure_town_point_actions(db, town.id, is_fake=False)
         await db.commit()
         print(f"  {name}: written (id {town.id}, {created} actions)")

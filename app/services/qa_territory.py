@@ -251,6 +251,9 @@ async def _ensure_town(db: AsyncSession) -> Town:
             )
         )
         await db.flush()
+    from app.services.localities import ensure_default_locality
+
+    await ensure_default_locality(db, town)
     return town
 
 

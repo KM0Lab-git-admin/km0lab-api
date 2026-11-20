@@ -96,7 +96,11 @@ async def _shop_out(
     )
     return data.model_copy(
         update={
-            "town_name": town.name if town else None,
+            # What a resident reads next to a shop is its town, not the
+            # municipality that manages it.
+            "town_name": shop.locality.name
+            if shop.locality is not None
+            else (town.name if town else None),
             "has_logo": has_logo,
             "has_hero": has_hero,
             "logo_url": media_public_path(shop.id, "logo")

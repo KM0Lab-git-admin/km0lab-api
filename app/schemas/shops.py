@@ -6,6 +6,8 @@ from app.schemas.opening_hours import OpeningHours
 
 
 class ShopOut(BaseModel):
+    # Town of the municipality the shop is in (null on legacy rows).
+    locality_id: str | None = None
     id: str
     town_id: str
     town_name: str | None = None

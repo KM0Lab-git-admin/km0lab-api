@@ -8,9 +8,11 @@ from sqlalchemy.orm import defer, lazyload, selectinload
 from app.db import get_db
 from app.demo import DEMO_TOWN_SLUG
 from app.deps import assert_town_scope, require_admin
-from app.models import Town, TownMedia, User
+from app.models import Locality, Town, TownMedia, TownPostalCode, User
 from app.qa import QA_SLUG_PREFIX
 from app.schemas import TownMediaOut, TownOut, TownPublicOut, TownUpdate
+from app.schemas.towns import LocalityOut
+from app.services.localities import art_urls, get_locality_art, list_localities
 from app.services.media_http import media_bytes_response, media_not_found_response
 from app.services.town_media import (
     delete_town_media,
@@ -76,12 +78,65 @@ def _to_public(town: Town, media: list[TownMedia] | None = None) -> TownPublicOu
     )
 
 
+async def _locality_cards(
+    db: AsyncSession, town: Town
+) -> tuple[list[LocalityOut], str | None]:
+    """Every town of the municipality, plus the municipality's own art."""
+    localities = await list_localities(db, town.id)
+    codes = (
+        await db.execute(
+            select(TownPostalCode)
+            .where(TownPostalCode.town_id == town.id)
+            .order_by(TownPostalCode.postal_code)
+        )
+    ).scalars().all()
+    by_locality, town_art = await art_urls(
+        db, town.id, [loc.id for loc in localities]
+    )
+    cards = [
+        LocalityOut(
+            id=loc.id,
+            name=loc.name,
+            slug=loc.slug,
+            postal_codes=[c.postal_code for c in codes if c.locality_id == loc.id],
+            art_url=by_locality.get(loc.id) or town_art,
+        )
+        for loc in localities
+    ]
+    return cards, town_art
+
+
+def _as_locality(
+    card: TownPublicOut,
+    town: Town,
+    home: LocalityOut | None,
+    localities: list[LocalityOut],
+) -> TownPublicOut:
+    """The public card seen from one town of the municipality."""
+    update: dict = {
+        "municipality_id": town.id,
+        "municipality_name": town.name,
+        "localities": localities,
+    }
+    if home is not None:
+        update.update(
+            name=home.name,
+            slug=home.slug,
+            postal_codes=home.postal_codes,
+            art_url=home.art_url,
+            locality_id=home.id,
+        )
+    return card.model_copy(update=update)
+
+
 @router.get("", response_model=list[TownPublicOut])
 async def list_towns_public(db: AsyncSession = Depends(get_db)):
     """Towns the residents app can offer (no auth), sorted by name.
 
-    Leaves out the sales demo and the QA territory: they are modes of the
-    product, not places a resident picks.
+    One entry per town a resident can live in: a municipality that groups
+    several towns contributes one entry for each. Leaves out the sales demo
+    and the QA territory: they are modes of the product, not places a
+    resident picks.
     """
     towns = list(
         (
@@ -115,7 +170,15 @@ async def list_towns_public(db: AsyncSession = Depends(get_db)):
     by_town: dict[str, list[TownMedia]] = {}
     for row in media_rows:
         by_town.setdefault(row.town_id, []).append(row)
-    return [_to_public(t, by_town.get(t.id, [])) for t in towns]
+    out: list[TownPublicOut] = []
+    for town in towns:
+        card = _to_public(town, by_town.get(town.id, []))
+        localities, _ = await _locality_cards(db, town)
+        if not localities:
+            out.append(_as_locality(card, town, None, []))
+            continue
+        out.extend(_as_locality(card, town, loc, localities) for loc in localities)
+    return sorted(out, key=lambda c: c.name.casefold())
 
 
 @router.get("/me", response_model=TownOut)
@@ -155,7 +218,26 @@ async def get_town_public(
     town = await _load_town(db, postal.town_id)
     if town is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Town not found")
-    return _to_public(town)
+    localities, _ = await _locality_cards(db, town)
+    home = next((loc for loc in localities if loc.id == postal.locality_id), None)
+    return _as_locality(_to_public(town), town, home, localities)
+
+
+@router.api_route("/localities/{locality_id}/art", methods=["GET", "HEAD"])
+async def download_locality_art(
+    locality_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Illustration of one town of a municipality (public, for <img src>)."""
+    row = await get_locality_art(db, locality_id)
+    if not row:
+        return media_not_found_response()
+    return media_bytes_response(
+        row.data,
+        row.content_type,
+        cache="public, max-age=86400",
+        byte_size=row.byte_size,
+    )
 
 
 @router.get("/{town_id}", response_model=TownOut)
