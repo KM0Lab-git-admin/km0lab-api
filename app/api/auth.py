@@ -63,15 +63,19 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 settings = get_settings()
 
 
+_OTP_REQUEST_LIMITS = {"development": "600/hour", "staging": "60/hour"}
+_OTP_VERIFY_LIMITS = {"development": "600/hour", "staging": "60/hour"}
+
+
 def _otp_request_limit() -> str:
-    """Demo/local: generous; production: tight."""
+    """Local: holgado (pruebas en bucle); UAT: generoso; producción: estricto."""
     env = get_settings().environment.lower().strip()
-    return "60/hour" if env in {"development", "staging"} else "5/hour"
+    return _OTP_REQUEST_LIMITS.get(env, "5/hour")
 
 
 def _otp_verify_limit() -> str:
     env = get_settings().environment.lower().strip()
-    return "60/hour" if env in {"development", "staging"} else "10/hour"
+    return _OTP_VERIFY_LIMITS.get(env, "10/hour")
 
 
 def _generate_code() -> str:

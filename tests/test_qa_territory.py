@@ -506,6 +506,31 @@ async def test_prepare_endpoint_requires_matching_token(client, qa, monkeypatch)
     assert await _count(qa, User) == 3
 
 
+async def test_rate_limit_key_only_frees_the_robot(monkeypatch):
+    from starlette.requests import Request
+
+    from app.ratelimit import rate_limit_key
+
+    def request(token=None):
+        headers = [(b"x-qa-token", token.encode())] if token else []
+        return Request(
+            {"type": "http", "headers": headers, "client": ("203.0.113.7", 1)}
+        )
+
+    # No token configured: everyone is limited by IP, header or not.
+    assert rate_limit_key(request("anything")) == "203.0.113.7"
+
+    monkeypatch.setattr(get_settings(), "qa_token", "s3cret-test-token")
+    assert rate_limit_key(request()) == "203.0.113.7"
+    assert rate_limit_key(request("wrong")) == "203.0.113.7"
+    first = rate_limit_key(request("s3cret-test-token"))
+    second = rate_limit_key(request("s3cret-test-token"))
+    assert first.startswith("qa-robot:") and first != second
+
+    monkeypatch.setattr(get_settings(), "environment", "production")
+    assert rate_limit_key(request("s3cret-test-token")) == "203.0.113.7"
+
+
 async def test_prepare_endpoint_closed_in_production(client, qa, monkeypatch):
     monkeypatch.setattr(get_settings(), "qa_token", "s3cret-test-token")
     monkeypatch.setattr(get_settings(), "environment", "production")

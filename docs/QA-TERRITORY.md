@@ -92,6 +92,9 @@ Borra lo que crearon ejecuciones anteriores y repara el sembrado.
 - Cerrado por defecto: responde **404** si `QA_TOKEN` está vacío o el
   entorno es `production`.
 - Exige la cabecera `X-QA-Token` con ese valor.
+- Las peticiones que traen esa cabecera válida no cuentan para los límites
+  por IP (acceso, alta de comercio): una ejecución da de alta una docena de
+  vecinos y no debe frenarse ni gastar el cupo de los vecinos reales.
 - `?older_than_minutes=120` (por defecto): no toca ejecuciones recientes.
 - `?dry_run=true`: solo informa.
 
