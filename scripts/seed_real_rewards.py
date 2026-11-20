@@ -10,8 +10,8 @@ Usage (from repo root):
 The catalog is edited once, in Demo KM0 (CP 00000), and is the same for
 every municipality. This copies it:
 
-- a reward the municipality does not have yet is created **inactive**: its
-  administrator switches it on from the backoffice;
+- a reward the municipality does not have yet is created **active** (with
+  the catalog's status): its administrator can switch it off;
 - a reward it already has gets the catalog's texts, points and image, and
   **keeps its status and its stock**;
 - a copy whose catalog reward is gone is deleted if nobody redeemed it,
@@ -44,7 +44,7 @@ def _print(town_name: str, report) -> None:
         if names:
             print(f"  {town_name}: {label} ({len(names)}): {', '.join(names)}")
 
-    show("new, inactive until the admin switches them on", report.created)
+    show("new, offered to residents from now on", report.created)
     show("already there, status and stock kept", report.updated)
     for old, new in report.renamed:
         print(f"  {town_name}: renamed '{old}' -> '{new}'")

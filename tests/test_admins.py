@@ -3,6 +3,13 @@
 import pytest
 from sqlalchemy import select
 
+from app.config import get_settings
+from app.demo import (
+    ADMIN_BAIX_MONTSENY_EMAIL,
+    DEMO_CODE,
+    PILOT_ADMIN_EMAILS,
+    is_fixed_otp_email,
+)
 from app.models import User
 from app.roles import flags_from_roles
 from app.security import create_access_token
@@ -124,3 +131,87 @@ async def test_refuses_accounts_whose_meaning_would_change(db_session):
     assert (await _user(db_session, "veina-malgrat@test.cat")).postal_code == "08380"
     assert (await _user(db_session, "admin@malgrat.test")).postal_code == "08380"
     assert await _user(db_session, EMAIL) is None
+
+
+# ── The pilot administrator's fixed code (demo mode) ─────────────────
+
+
+async def _login(client, email: str, code: str = DEMO_CODE):
+    return await client.post(
+        f"{API}/auth/verify-otp", json={"email": email, "code": code}
+    )
+
+
+async def test_fixed_code_is_for_that_one_address_only():
+    assert PILOT_ADMIN_EMAILS == {"baixmontseny@km0lab.com"}
+    assert is_fixed_otp_email("BaixMontseny@km0lab.com ")
+    for other in (
+        "baixmontseny@km0lab.cat",
+        "baixmontseny2@km0lab.com",
+        "admin-baixmontseny@km0lab.com",
+        "malgrat@km0lab.com",
+    ):
+        assert not is_fixed_otp_email(other)
+
+
+async def test_pilot_admin_enters_with_the_fixed_code(client, db_session, capture_otp):
+    await malgrat(db_session)
+    baix = await baix_montseny(db_session)
+    await register_admin(db_session, town=baix, email=ADMIN_BAIX_MONTSENY_EMAIL)
+    await db_session.commit()
+
+    asked = await client.post(
+        f"{API}/auth/request-otp", json={"email": ADMIN_BAIX_MONTSENY_EMAIL}
+    )
+    assert asked.status_code == 200
+    assert capture_otp() is None  # no email goes out for this account
+
+    assert (await _login(client, ADMIN_BAIX_MONTSENY_EMAIL, "000000")).status_code == 400
+    r = await _login(client, ADMIN_BAIX_MONTSENY_EMAIL)
+    assert r.status_code == 200, r.text
+    user = r.json()["user"]
+    assert "admin" in user["roles"] and user["is_fake"] is False
+    assert user["municipality_name"] == "Baix Montseny"
+
+    headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    mine = await client.get(f"{API}/towns/me", headers=headers)
+    assert mine.status_code == 200 and mine.json()["id"] == baix.id
+
+
+async def test_fixed_code_works_in_staging_too(client, db_session, monkeypatch):
+    baix = await baix_montseny(db_session)
+    await register_admin(db_session, town=baix, email=ADMIN_BAIX_MONTSENY_EMAIL)
+    await db_session.commit()
+    monkeypatch.setattr(get_settings(), "environment", "staging")
+
+    assert (await _login(client, ADMIN_BAIX_MONTSENY_EMAIL)).status_code == 200
+
+
+async def test_fixed_code_is_refused_in_production(client, db_session, monkeypatch):
+    baix = await baix_montseny(db_session)
+    await register_admin(db_session, town=baix, email=ADMIN_BAIX_MONTSENY_EMAIL)
+    await db_session.commit()
+    monkeypatch.setattr(get_settings(), "environment", "production")
+
+    asked = await client.post(
+        f"{API}/auth/request-otp", json={"email": ADMIN_BAIX_MONTSENY_EMAIL}
+    )
+    assert asked.status_code == 403
+    r = await _login(client, ADMIN_BAIX_MONTSENY_EMAIL)
+    assert r.status_code == 403
+    assert "access_token" not in r.json()
+
+
+async def test_fixed_code_never_creates_the_account(client, db_session):
+    await baix_montseny(db_session)
+    db_session.add(User(email="veina@test.cat", slug="veina", postal_code="17400"))
+    await db_session.commit()
+
+    # Not registered yet: the code opens nothing and creates nothing.
+    r = await _login(client, ADMIN_BAIX_MONTSENY_EMAIL)
+    assert r.status_code == 400
+    assert await _user(db_session, ADMIN_BAIX_MONTSENY_EMAIL) is None
+    # And it is no master key: any other account still needs its own code.
+    assert (await _login(client, "veina@test.cat")).status_code == 400
+    assert (await _login(client, "nou@test.cat")).status_code == 400
+    assert await _user(db_session, "nou@test.cat") is None

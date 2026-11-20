@@ -209,8 +209,7 @@ async def test_public_rewards_parity_demo_and_malgrat(client, db_session):
         TownPostalCode(postal_code="08380", town_id=malgrat.id, is_primary=True)
     )
     await db_session.flush()
-    # As a local seed does for a brand-new town: the catalog switched on.
-    await seed_real_rewards(db_session, town_id=malgrat.id, activate_new=True)
+    await seed_real_rewards(db_session, town_id=malgrat.id)
     await db_session.commit()
 
     demo = await client.get(

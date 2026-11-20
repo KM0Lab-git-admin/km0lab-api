@@ -47,7 +47,7 @@ async def _demo_reward(db, name: str) -> Reward:
 async def test_admin_can_only_switch_a_reward_on_and_off(client, db_session):
     await catalog(db_session)
     town = await malgrat(db_session)
-    await sync_catalog_rewards(db_session, town_id=town.id, activate_new=True)
+    await sync_catalog_rewards(db_session, town_id=town.id)
     headers = await admin_headers(db_session, town, "08380")
     cap = (await rewards_of(db_session, town))["Gorra KM0 LAB"]
     url = f"{API}/rewards/{cap.id}"
@@ -98,7 +98,7 @@ async def test_admin_cannot_touch_another_municipality(client, db_session):
     await catalog(db_session)
     mal = await malgrat(db_session)
     baix = await baix_montseny(db_session)
-    await sync_catalog_rewards(db_session, town_id=mal.id, activate_new=True)
+    await sync_catalog_rewards(db_session, town_id=mal.id)
     await sync_catalog_rewards(db_session, town_id=baix.id)
     mal_admin = await admin_headers(db_session, mal, "08380")
     baix_admin = await admin_headers(db_session, baix, "17400")
@@ -118,21 +118,21 @@ async def test_admin_cannot_touch_another_municipality(client, db_session):
     )
     assert r.status_code == 404
     r = await client.patch(
-        f"{API}/rewards/{baix_cap.id}", json={"status": "active"}, headers=mal_admin
+        f"{API}/rewards/{baix_cap.id}", json={"status": "inactive"}, headers=mal_admin
     )
     assert r.status_code == 404
     rewards = await rewards_of(db_session, mal)
     assert rewards["Gorra KM0 LAB"].status == "active"
-    assert (await rewards_of(db_session, baix))["Gorra KM0 LAB"].status == "inactive"
+    assert (await rewards_of(db_session, baix))["Gorra KM0 LAB"].status == "active"
 
-    # Switching one on in Baix Montseny shows it in its three towns only.
+    # Switching one off in Baix Montseny hides it in its three towns only.
     r = await client.patch(
-        f"{API}/rewards/{baix_cap.id}", json={"status": "active"}, headers=baix_admin
+        f"{API}/rewards/{baix_cap.id}", json={"status": "inactive"}, headers=baix_admin
     )
     assert r.status_code == 200
     for code in ("17400", "17450", "17404"):
-        assert await _public_names(client, code) == ["Gorra KM0 LAB"]
-    assert len(await _public_names(client, "08380")) == len(FAKE_DEMO_REWARDS)
+        assert "Gorra KM0 LAB" not in await _public_names(client, code)
+    assert "Gorra KM0 LAB" in await _public_names(client, "08380")
 
 
 async def test_catalog_editor_keeps_full_control(client, db_session):
@@ -153,7 +153,7 @@ async def test_catalog_editor_keeps_full_control(client, db_session):
 # ── Copying the catalog ───────────────────────────────────────────────
 
 
-async def test_new_municipality_gets_the_catalog_switched_off(client, db_session):
+async def test_new_municipality_gets_the_catalog_switched_on(client, db_session):
     await catalog(db_session)
     baix = await baix_montseny(db_session)
 
@@ -163,10 +163,11 @@ async def test_new_municipality_gets_the_catalog_switched_off(client, db_session
     assert len(report.created) == len(FAKE_DEMO_REWARDS)
     assert report.updated == report.deleted == report.untouched == []
     rewards = await rewards_of(db_session, baix)
-    assert {r.status for r in rewards.values()} == {"inactive"}
+    assert {r.status for r in rewards.values()} == {"active"}
     assert all(r.catalog_id for r in rewards.values())
+    # The three towns of the municipality offer the same catalog.
     for code in ("17400", "17450", "17404"):
-        assert await _public_names(client, code) == []
+        assert len(await _public_names(client, code)) == len(FAKE_DEMO_REWARDS)
 
     # Running it again changes nothing.
     again = await sync_catalog_rewards(db_session, town_id=baix.id)
@@ -176,7 +177,7 @@ async def test_new_municipality_gets_the_catalog_switched_off(client, db_session
 async def test_update_keeps_status_stock_and_what_was_redeemed(client, db_session):
     demo = await catalog(db_session)
     town = await malgrat(db_session)
-    await sync_catalog_rewards(db_session, town_id=town.id, activate_new=True)
+    await sync_catalog_rewards(db_session, town_id=town.id)
     await db_session.commit()
     before = await rewards_of(db_session, town)
 
@@ -232,9 +233,9 @@ async def test_update_keeps_status_stock_and_what_was_redeemed(client, db_sessio
     assert after["Val de 10 €"].id == ids["Bono 10 €"]
     assert after["Val de 10 €"].status == "active"
     assert "Bono 10 €" not in after
-    # New in the catalog: there, switched off until the admin decides.
+    # New in the catalog: offered from now on, like everywhere else.
     assert report.created == ["Ampolla nova"]
-    assert after["Ampolla nova"].status == "inactive"
+    assert after["Ampolla nova"].status == "active"
     # Gone from the catalog: kept and off if redeemed, removed otherwise.
     assert report.retired == ["Entrada de cinema"]
     assert after["Entrada de cinema"].status == "inactive"
@@ -242,8 +243,8 @@ async def test_update_keeps_status_stock_and_what_was_redeemed(client, db_sessio
     assert "Bono 20 €" not in after
 
     public = await _public_names(client, "08380")
-    assert "Val de 10 €" in public
-    assert not {"Gorra KM0 LAB", "Ampolla nova", "Entrada de cinema"} & set(public)
+    assert {"Val de 10 €", "Ampolla nova"} <= set(public)
+    assert not {"Gorra KM0 LAB", "Entrada de cinema"} & set(public)
 
 
 async def test_rewards_older_than_the_link_are_adopted_or_left_alone(db_session):
@@ -285,8 +286,5 @@ async def test_rewards_older_than_the_link_are_adopted_or_left_alone(db_session)
     assert after["Val per un 5% de descompe"].status == "active"
     assert after["Val per un 5% de descompe"].catalog_id is None
     assert report.deleted == []
-    # The rest of the catalog arrives switched off.
+    # The rest of the catalog arrives, on.
     assert len(report.created) == len(FAKE_DEMO_REWARDS) - 1
-    assert {
-        r.status for n, r in after.items() if n not in ("Gorra KM0 LAB", "Val per un 5% de descompe")
-    } == {"inactive"}

@@ -28,6 +28,7 @@ from app.demo import (
     is_demo_email,
     is_fixed_otp_email,
     is_malgrat_qa_email,
+    is_pilot_admin_email,
     sync_user_fake_partition,
 )
 from app.catalog.email_otp import normalize_otp_lang
@@ -185,6 +186,15 @@ async def verify_otp_endpoint(
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Malgrat QA user not seeded — run: python -m scripts.seed",
+                )
+            return await _auth_out(db, user)
+        if is_pilot_admin_email(email):
+            # Never created here: only an account already registered as the
+            # administrator of a real municipality may use the fixed code.
+            if not user or user.is_fake or not user.is_admin:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Pilot admin not registered — run: python -m scripts.add_admin",
                 )
             return await _auth_out(db, user)
 

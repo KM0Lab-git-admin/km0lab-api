@@ -42,7 +42,21 @@ MALGRAT_QA_EMAILS: frozenset[str] = frozenset(
     }
 )
 
-FIXED_OTP_EMAILS: frozenset[str] = DEMO_EMAILS | MALGRAT_QA_EMAILS
+# Baix Montseny (real, is_fake=false) while its pilot runs in demo mode:
+# its administrator enters with 123456 in development/staging only. The
+# account is not created by logging in: ``scripts/add_admin.py`` registers
+# it. Exactly this address, nothing wider.
+#
+# The repositories are public: anyone who reads this can enter UAT as this
+# administrator. Remove it before the municipality has real residents or
+# shops (then the account logs in with a code sent to its mailbox).
+ADMIN_BAIX_MONTSENY_EMAIL = "baixmontseny@km0lab.com"
+
+PILOT_ADMIN_EMAILS: frozenset[str] = frozenset({ADMIN_BAIX_MONTSENY_EMAIL})
+
+FIXED_OTP_EMAILS: frozenset[str] = (
+    DEMO_EMAILS | MALGRAT_QA_EMAILS | PILOT_ADMIN_EMAILS
+)
 
 DEMO_ROLES: dict[str, list[str]] = {
     DEMO_RESIDENT_EMAIL: [ROLE_RESIDENT],
@@ -65,8 +79,13 @@ def is_malgrat_qa_email(email: str) -> bool:
     return email.lower().strip() in MALGRAT_QA_EMAILS
 
 
+def is_pilot_admin_email(email: str) -> bool:
+    return email.lower().strip() in PILOT_ADMIN_EMAILS
+
+
 def is_fixed_otp_email(email: str) -> bool:
-    """123456 bypass (dev/staging). Demo partition, Malgrat QA, QA territory."""
+    """123456 bypass (dev/staging). Demo partition, Malgrat QA, pilot admin,
+    QA territory."""
     return email.lower().strip() in FIXED_OTP_EMAILS or is_qa_email(email)
 
 

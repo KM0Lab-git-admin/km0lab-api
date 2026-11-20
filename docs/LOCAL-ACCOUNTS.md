@@ -28,6 +28,23 @@ CP `08380`. `is_fake=false`. En el backoffice ves **usuarios reales de Malgrat**
 
 Vecinos de prueba: tu Gmail y Jobmails. **OTP real** (correo), no 123456.
 
+## Baix Montseny (municipio real, piloto en modo demostración)
+
+| Email | Rol | OTP |
+| ----- | --- | --- |
+| `baixmontseny@km0lab.com` | admin Baix Montseny | `123456` |
+
+La cuenta no se crea al entrar: se da de alta con
+`python -m scripts.add_admin --town "Baix Montseny" --email baixmontseny@km0lab.com`
+(sin `--apply` solo enseña). El código fijo vale únicamente para ese correo
+y únicamente fuera de producción.
+
+**Temporal.** El repositorio es público: cualquiera que lea esto puede
+entrar en UAT como administrador de Baix Montseny. Mientras no haya vecinos
+ni comercios no hay nada que estropear; antes de que los haya, quita el
+correo de `PILOT_ADMIN_EMAILS` (`app/demo.py`) y la cuenta pasará a entrar
+con el código que le llegue por correo.
+
 ```bash
 python -m scripts.seed              # pueblos + cuentas QA Malgrat
 python -m scripts.seed_malgrat_qa   # solo re-asegura admin/merchants Malgrat

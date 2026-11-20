@@ -335,7 +335,6 @@ class CatalogSyncReport:
     deleted: list[str] = field(default_factory=list)  # never redeemed
     # Rewards of the municipality that are not copies of the catalog.
     untouched: list[str] = field(default_factory=list)
-    new_status: str = "inactive"
 
     @property
     def synced(self) -> int:
@@ -347,16 +346,14 @@ async def sync_catalog_rewards(
     *,
     town_id: str,
     shop_id: str | None = None,
-    activate_new: bool = False,
 ) -> CatalogSyncReport:
     """Copy the reward catalog (Demo KM0, CP 00000) to a real municipality.
 
     The catalog is the same for everyone; what each municipality decides is
     which rewards it offers. So:
 
-    - A reward the municipality does not have yet is created **inactive**:
-      its admin switches it on. ``activate_new`` (local seeds only) keeps
-      the catalog's own status instead.
+    - A reward the municipality does not have yet is created with the
+      catalog's status (active, normally): its admin can switch it off.
     - A reward it already has gets the catalog's content (name, texts,
       points, value, validity, image) and **keeps its status and its
       stock**: both are the municipality's (the admin's switch, and the
@@ -369,7 +366,7 @@ async def sync_catalog_rewards(
     are adopted by name the first time; after that, renaming a catalog
     reward renames its copies instead of duplicating them.
     """
-    report = CatalogSyncReport(new_status="catalog" if activate_new else "inactive")
+    report = CatalogSyncReport()
     demo_town = await ensure_demo_town(db)
     if town_id == demo_town.id:
         return report
@@ -430,7 +427,7 @@ async def sync_catalog_rewards(
                 id=_uuid() if rid in by_id else rid,
                 town_id=town_id,
                 is_fake=False,
-                status=src.status if activate_new else "inactive",
+                status=src.status,
                 stock=src.stock,
             )
             db.add(reward)
@@ -506,12 +503,9 @@ async def seed_real_rewards(
     *,
     town_id: str,
     shop_id: str | None = None,
-    activate_new: bool = False,
 ) -> int:
     """``sync_catalog_rewards`` for callers that only want the count."""
-    report = await sync_catalog_rewards(
-        db, town_id=town_id, shop_id=shop_id, activate_new=activate_new
-    )
+    report = await sync_catalog_rewards(db, town_id=town_id, shop_id=shop_id)
     return report.synced
 
 

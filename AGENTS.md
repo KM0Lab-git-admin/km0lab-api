@@ -60,7 +60,11 @@ python -m scripts.check_flows_mysql  # flujos y concurrencia contra MySQL local
    `users.points` es un saldo cacheado. No modifiques el saldo sin
    registrar su movimiento.
 4. **Código OTP fijo `123456`** solo existe con `ENVIRONMENT=development`
-   o `staging`. No lo actives ni lo simules en producción.
+   o `staging`. No lo actives ni lo simules en producción. Las cuentas que
+   lo usan son una lista cerrada en `app/demo.py`: no la amplíes sin que
+   se pida. Incluye, **de forma temporal**, al administrador de Baix
+   Montseny (`PILOT_ADMIN_EMAILS`), que es un municipio real: hay que
+   quitarlo antes de que tenga vecinos o comercios de verdad.
 5. **Datos: Railway → local.** `scripts/pull_from_railway.py` es el flujo
    diario y nunca escribe en Railway. `scripts/sync_to_railway.py`
    **sobrescribe la base remota**: solo se ejecuta cuando el usuario pide
@@ -119,7 +123,8 @@ la cuenta de demostración. Cada municipio real tiene una copia.
   o imagen contesta 403 `reward_catalog_locked`. `RewardOut.content_locked`
   se lo dice al backoffice.
 - **La copia la hace `scripts/seed_real_rewards.py`** (`--town` o `--all`;
-  sin `--apply` solo enseña). Un premio nuevo nace **inactivo**; uno que ya
+  sin `--apply` solo enseña). Un premio nuevo nace **activo** (con el
+  estado que tenga en el catálogo) y el administrador puede apagarlo; uno que ya
   estaba recibe textos, puntos e imagen del catálogo y **conserva su estado
   y sus existencias**; uno que ya no está en el catálogo se borra si nadie
   lo canjeó y, si no, se queda apagado; uno que no viene del catálogo no se
