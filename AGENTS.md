@@ -82,6 +82,28 @@ python -m scripts.check_flows_mysql  # flujos y concurrencia contra MySQL local
     hace sus comprobaciones con lecturas `with_for_update`. SQLite no lo
     detecta: se verifica con `scripts/check_flows_mysql.py`.
 
+## Versiones y compatibilidad
+
+La versión del producto está en el fichero `VERSION` de la raíz. **No se
+edita a mano**: la cambia el comando de publicar de `km0lab`
+(`km0lab/docs/VERSIONES.md`). `/api/v1/health` la devuelve junto al commit.
+
+La app nativa se publica menos a menudo que esta API (más o menos una vez
+al mes), así que **en los móviles hay siempre una app más antigua que el
+servidor**. Mientras esa app esté admitida:
+
+- **Añade, no quites.** Un campo nuevo es compatible. Quitar o renombrar un
+  campo, cambiar su tipo o volver obligatorio uno opcional rompe a la app
+  publicada. Si hay que hacerlo, primero se añade lo nuevo, se publica la
+  app que lo usa, y solo después se retira lo viejo.
+- **Versión mínima.** `MIN_APP_VERSION` es la app más antigua admitida. A
+  una app por debajo se le contesta 426 con `app_update_required`
+  (`app/version.py`) y enseña «actualiza la app». Súbela cuando retires
+  algo que una app antigua todavía usa.
+
+La comprobación automática vive en `km0lab`: cada noche se lanzan los
+recorridos de la última app publicada contra esta API en UAT.
+
 ## Git
 
 Rama de trabajo `develop` (despliega a UAT). `main` es producción y solo

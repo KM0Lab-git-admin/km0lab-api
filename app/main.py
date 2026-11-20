@@ -30,6 +30,7 @@ from app.api import (
 from app.config import get_settings
 from app.db import Base, engine
 from app.ratelimit import limiter
+from app.version import API_VERSION, AppVersionMiddleware, min_app_version
 
 logging.basicConfig(level=logging.INFO)
 settings = get_settings()
@@ -45,7 +46,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="KM0 LAB API",
-    version="0.2.0",
+    version=API_VERSION,
     description=(
         "Backend KM0 LAB: auth OTP, towns, shops, promotions, "
         "point actions, rewards, redemptions, QR scans, invitations."
@@ -55,6 +56,10 @@ app = FastAPI(
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Antes que CORS: así la respuesta 426 también sale con sus cabeceras CORS
+# y el navegador deja que la app la lea.
+app.add_middleware(AppVersionMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -98,7 +103,8 @@ def _deployed_commit() -> str | None:
 async def health():
     return {
         "status": "healthy",
-        "version": "0.2.0",
+        "version": API_VERSION,
+        "min_app_version": min_app_version() or None,
         "environment": settings.environment,
         "commit": _deployed_commit(),
     }
