@@ -2,13 +2,14 @@
 
 Usage (from repo root, with DB up):
 
-    python -m scripts.seed_town_art            # shows what would change
-    python -m scripts.seed_town_art --apply    # writes
+    python -m scripts.seed_town_art                            # shows what would change
+    python -m scripts.seed_town_art --apply                    # writes to the local DB
+    python -m scripts.seed_town_art --target railway --apply   # writes to UAT
 
 One image per town in scripts/seed_media/towns/<town-slug>.webp. A town with
-no file keeps what it has; a file with no town is reported and skipped. It
-writes to the database of DATABASE_URL: against Railway it is a publication,
-so it only runs when the user asks to publish.
+no file keeps what it has; a file with no town is reported and skipped.
+With --target railway it is a publication, so it only runs when the user
+asks to publish.
 """
 
 from __future__ import annotations
@@ -17,16 +18,18 @@ import argparse
 import asyncio
 from pathlib import Path
 
-from sqlalchemy import select
-
-from app.db import SessionLocal, engine
-from app.models import Town, TownMedia
+from scripts._target import TARGETS, point_at
 
 ART_DIR = Path(__file__).resolve().parent / "seed_media" / "towns"
 CONTENT_TYPES = {".webp": "image/webp", ".png": "image/png", ".jpg": "image/jpeg"}
 
 
 async def _run(apply: bool) -> None:
+    from sqlalchemy import select
+
+    from app.db import SessionLocal
+    from app.models import Town, TownMedia
+
     files = sorted(p for p in ART_DIR.iterdir() if p.suffix.lower() in CONTENT_TYPES)
     if not files:
         print(f"No images in {ART_DIR}")
@@ -80,6 +83,8 @@ async def _run(apply: bool) -> None:
 
 
 async def main(apply: bool) -> None:
+    from app.db import engine
+
     try:
         await _run(apply)
     finally:
@@ -88,5 +93,8 @@ async def main(apply: bool) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--target", choices=TARGETS, default="local")
     parser.add_argument("--apply", action="store_true")
-    asyncio.run(main(parser.parse_args().apply))
+    parsed = parser.parse_args()
+    print(f"Database: {point_at(parsed.target)}")
+    asyncio.run(main(parsed.apply))
