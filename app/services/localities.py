@@ -171,6 +171,47 @@ async def locality_for_postal_code(
     return row.locality if row else None
 
 
+class LocalityRefused(ValueError):
+    """The shop's town cannot be decided. ``code`` goes to the client."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+LOCALITY_REQUIRED = "locality_required"
+LOCALITY_NOT_IN_TOWN = "locality_not_in_town"
+
+
+async def resolve_shop_locality(
+    db: AsyncSession,
+    *,
+    town_id: str,
+    locality_id: str | None = None,
+    postal_code: str | None = None,
+) -> Locality | None:
+    """The town of the municipality a shop belongs to.
+
+    In order: the one the caller names (it must be of this municipality),
+    the one its postal code belongs to, the only one there is. With several
+    towns and neither hint it is not guessed: ``LocalityRefused``.
+
+    A municipality without localities (rows older than them) gives None.
+    """
+    if locality_id:
+        locality = await db.get(Locality, locality_id)
+        if locality is None or locality.town_id != town_id:
+            raise LocalityRefused(LOCALITY_NOT_IN_TOWN)
+        return locality
+    by_code = await locality_for_postal_code(db, town_id, postal_code)
+    if by_code is not None:
+        return by_code
+    localities = await list_localities(db, town_id)
+    if len(localities) > 1:
+        raise LocalityRefused(LOCALITY_REQUIRED)
+    return localities[0] if localities else None
+
+
 # ── Grouping ──────────────────────────────────────────────────────────
 
 

@@ -106,6 +106,13 @@ async def _locality_cards(
     return cards, town_art
 
 
+async def _admin_out(db: AsyncSession, town: Town) -> TownOut:
+    """The municipality as its administrator sees it, towns included."""
+    out = _to_out(town)
+    out.localities, _ = await _locality_cards(db, town)
+    return out
+
+
 def _as_locality(
     card: TownPublicOut,
     town: Town,
@@ -191,7 +198,7 @@ async def get_my_town(
     town = await _load_town(db, user.town_id)
     if not town:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Town not found")
-    return _to_out(town)
+    return await _admin_out(db, town)
 
 
 @router.get("/public", response_model=TownPublicOut)
@@ -250,7 +257,7 @@ async def get_town(
     town = await _load_town(db, town_id)
     if not town:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Town not found")
-    return _to_out(town)
+    return await _admin_out(db, town)
 
 
 @router.patch("/{town_id}", response_model=TownOut)
@@ -288,7 +295,7 @@ async def update_town(
         setattr(town, field, value)
     await db.commit()
     town = await _load_town(db, town_id)
-    return _to_out(town)  # type: ignore[arg-type]
+    return await _admin_out(db, town)  # type: ignore[arg-type]
 
 
 @router.put("/{town_id}/media/{kind}", response_model=TownMediaOut)

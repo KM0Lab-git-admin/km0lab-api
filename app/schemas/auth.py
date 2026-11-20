@@ -28,7 +28,11 @@ class UserOut(BaseModel):
     lang: str
     postal_code: str | None
     town_id: str | None = None
+    # ``town_name`` is the town the person lives in (what the app shows).
+    # ``municipality_name`` is the managed scope: what the backoffice
+    # shows its administrator. They differ when a municipality groups towns.
     town_name: str | None = None
+    municipality_name: str | None = None
     points: int
     roles: list[str]
     shop_id: str | None = None

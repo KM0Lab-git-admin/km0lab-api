@@ -26,6 +26,13 @@ class TownOut(BaseModel):
     default_lang: str = "ca"
     expiry_months: int | None
     postal_codes: list[TownPostalCodeOut] = []
+    # The towns of the municipality (one, with its own name, when it is a
+    # single town). The backoffice offers them when creating a shop.
+    # Filled by the endpoint: the alias keeps ``from_attributes`` away from
+    # the ORM relationship of the same name (lazy, and of another shape).
+    localities: list["LocalityOut"] = Field(
+        default_factory=list, validation_alias="localities_out"
+    )
     created_at: datetime
     updated_at: datetime
 
@@ -99,3 +106,6 @@ class TownMediaOut(BaseModel):
     content_type: str
     byte_size: int
     url: str
+
+
+TownOut.model_rebuild()

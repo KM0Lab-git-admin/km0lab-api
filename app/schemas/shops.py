@@ -48,6 +48,11 @@ class ShopCreate(BaseModel):
     visit_points: int | None = Field(default=None, ge=0)
     address: str | None = None
     postal_code: str | None = None
+    # Town of the municipality the shop is in. Optional: with one town it
+    # is that one; with several it is taken from ``postal_code`` when that
+    # code belongs to one of them. Otherwise the answer is 422
+    # ``locality_required``.
+    locality_id: str | None = None
     phone: str | None = None
     website: str | None = None
     description: str | None = None
@@ -64,6 +69,7 @@ class ShopUpdate(BaseModel):
     visit_points: int | None = Field(default=None, ge=0)
     address: str | None = None
     postal_code: str | None = None
+    locality_id: str | None = None
     phone: str | None = None
     website: str | None = None
     description: str | None = None

@@ -60,6 +60,11 @@ from app.services.shop_media import (
 )
 from app.services.shop_qr import build_scan_url, ensure_shop_qr, qr_png_url
 from app.services.invitations import attach_business_conversion, convert_business_activation
+from app.services.localities import (
+    LocalityRefused,
+    locality_for_postal_code,
+    resolve_shop_locality,
+)
 from app.services.towns import get_postal_code
 
 router = APIRouter(prefix="/shops", tags=["shops"])
@@ -111,6 +116,25 @@ async def _shop_out(
             else shop.hero_url,
         }
     )
+
+
+async def _shop_locality_id(
+    db: AsyncSession,
+    *,
+    town_id: str,
+    locality_id: str | None = None,
+    postal_code: str | None = None,
+) -> str | None:
+    """Town of the municipality for a shop, or 422 when it cannot be told."""
+    try:
+        locality = await resolve_shop_locality(
+            db, town_id=town_id, locality_id=locality_id, postal_code=postal_code
+        )
+    except LocalityRefused as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.code
+        ) from exc
+    return locality.id if locality is not None else None
 
 
 async def _default_lang_for_shop(db: AsyncSession, shop: Shop) -> str:
@@ -269,6 +293,9 @@ async def public_shop_signup(
     categories = await resolve_category_slugs(db, payload.categories)
     shop = Shop(
         town_id=postal.town_id,
+        locality_id=await _shop_locality_id(
+            db, town_id=postal.town_id, postal_code=postal.postal_code
+        ),
         name=payload.name.strip(),
         categories=categories,
         contact_email=email,
@@ -499,6 +526,12 @@ async def create_shop(
     if not user.town_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Admin has no town")
     categories = await resolve_category_slugs(db, payload.categories)
+    locality_id = await _shop_locality_id(
+        db,
+        town_id=user.town_id,
+        locality_id=payload.locality_id,
+        postal_code=payload.postal_code,
+    )
     town = await db.get(Town, user.town_id)
     default_lang = (town.default_lang if town else DEFAULT_LANG) or DEFAULT_LANG
     visit_points = (
@@ -508,6 +541,7 @@ async def create_shop(
     )
     shop = Shop(
         town_id=user.town_id,
+        locality_id=locality_id,
         name=payload.name,
         emoji=payload.emoji,
         categories=categories,
@@ -702,6 +736,19 @@ async def update_shop(
     assert_town_scope(user, shop.town_id)
     default_lang = await _default_lang_for_shop(db, shop)
     data = payload.model_dump(exclude_unset=True)
+    if data.get("locality_id"):
+        data["locality_id"] = await _shop_locality_id(
+            db, town_id=shop.town_id, locality_id=data["locality_id"]
+        )
+    else:
+        data.pop("locality_id", None)
+        # A new postal code that belongs to another town of the
+        # municipality moves the shop there; any other leaves it where it is.
+        moved = await locality_for_postal_code(
+            db, shop.town_id, data.get("postal_code")
+        )
+        if moved is not None:
+            data["locality_id"] = moved.id
     if "categories" in data:
         data["categories"] = await resolve_category_slugs(db, data["categories"])
     description = data.pop("description", None)
