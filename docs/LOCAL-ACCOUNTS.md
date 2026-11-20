@@ -43,6 +43,24 @@ Backoffice local (`http://localhost:8080`): botones **Admin Malgrat** / **Comer�
 
 App: invita con un vecino (Gmail) → **Copiar enlace** (en local ya sale `http://localhost:5173/i/{código}`) → incógnito abre esa URL → Jobmail + OTP del correo + CP 08380.
 
+## Territorio de pruebas (QA)
+
+CP `99999`. `is_fake=true`. Para las pruebas automáticas; se puede borrar
+entero. Detalle en [`QA-TERRITORY.md`](QA-TERRITORY.md).
+
+| Email | Rol | OTP |
+|-------|-----|-----|
+| `qa+vecino@km0lab.com` | vecino (1000 puntos) | `123456` |
+| `qa+comerc@km0lab.com` | comercio QA | `123456` |
+| `qa+admin@km0lab.com` | admin QA | `123456` |
+| `qa+loquesea@km0lab.com` | vecino **nuevo** (se crea al entrar) | `123456` |
+
+```bash
+python -m scripts.seed_qa             # crea o repara el territorio
+python -m scripts.purge_qa            # enseña lo que borraría
+python -m scripts.purge_qa --apply    # borra lo que crearon las pruebas
+```
+
 ## Qué no mezclar
 
 - `admin@km0lab.com` ≠ `admin-malgrat@km0lab.com`

@@ -42,6 +42,8 @@ uvicorn app.main:app --reload
 alembic upgrade head
 python -m scripts.seed             # pueblos reales + cuentas QA
 pytest                             # usa SQLite en memoria, no necesita MySQL
+python -m scripts.seed_qa          # territorio de pruebas (CP 99999)
+python -m scripts.check_flows_mysql  # flujos y concurrencia contra MySQL local
 ```
 
 ## Reglas
@@ -70,6 +72,15 @@ pytest                             # usa SQLite en memoria, no necesita MySQL
    traducción automática de campos de entidad está en
    `app/services/translation.py`.
 8. **Secretos** solo en `.env` (no commiteado) y en las variables de Railway.
+9. **Datos de prueba solo en el territorio QA.** El piloto corre en UAT con
+   una sola base de datos. Lo que cree una prueba vive en CP 9999x, con
+   cuentas `qa+…@km0lab.com`, `is_fake=true` y nombre `[QA]`, para poder
+   borrarlo con `scripts/purge_qa.py`. Nunca escribas datos de prueba en un
+   municipio real ni en Demo KM0 (00000). Ver `docs/QA-TERRITORY.md`.
+10. **Puntos bajo bloqueo.** Un endpoint que comprueba y luego modifica el
+    saldo llama primero a `lock_user_points` (`app/services/points.py`) y
+    hace sus comprobaciones con lecturas `with_for_update`. SQLite no lo
+    detecta: se verifica con `scripts/check_flows_mysql.py`.
 
 ## Git
 
@@ -80,6 +91,8 @@ de 50 caracteres como máximo. Sin `--amend` ni `--force` salvo petición.
 ## Antes de cerrar una tarea
 
 - [ ] `pytest` en verde.
+- [ ] `python -m scripts.check_flows_mysql` en verde si tocaste puntos,
+      escaneos, canjes, invitaciones o el territorio QA.
 - [ ] Migración incluida si cambió `app/models.py`.
 - [ ] Test de ámbito municipal si el endpoint devuelve o modifica datos de
       una població.
