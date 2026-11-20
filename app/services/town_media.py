@@ -1,20 +1,54 @@
-"""Upsert / delete binary town brand media (logo)."""
+"""Upsert / delete binary town media: brand logo and header illustration."""
+
+from datetime import datetime
 
 from fastapi import HTTPException, UploadFile, status
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.base import NO_VALUE
 
 from app.models import TownMedia
 
-ALLOWED_KINDS = frozenset({"logo"})
+# logo: the entity's brand mark. art: the illustration that identifies the
+# town in the residents app (home header, postal-code screen).
+ALLOWED_KINDS = frozenset({"logo", "art"})
 ALLOWED_CONTENT_TYPES = frozenset(
     {"image/jpeg", "image/png", "image/webp", "image/jpg"}
 )
 MAX_BYTES = 5 * 1024 * 1024
 
 
-def media_public_path(town_id: str, kind: str = "logo") -> str:
-    return f"/api/v1/towns/{town_id}/media/{kind}"
+def _loaded_timestamp(row: TownMedia, name: str) -> datetime | None:
+    """Read a timestamp only if it is already in memory.
+
+    An expired attribute would lazy-load, and under async MySQL that raises
+    MissingGreenlet (see ``reward_media``).
+    """
+    value = inspect(row).attrs[name].loaded_value
+    if value is NO_VALUE or not isinstance(value, datetime):
+        return None
+    return value
+
+
+def media_version(row: TownMedia | None) -> str | None:
+    """Cache-busting token: changes whenever the image is replaced."""
+    if row is None:
+        return None
+    ts = _loaded_timestamp(row, "updated_at") or _loaded_timestamp(
+        row, "created_at"
+    )
+    if ts is None:
+        return str(row.byte_size or 0)
+    return str(int(ts.timestamp()))
+
+
+def media_public_path(
+    town_id: str, kind: str = "logo", version: str | None = None
+) -> str:
+    path = f"/api/v1/towns/{town_id}/media/{kind}"
+    if version:
+        return f"{path}?v={version}"
+    return path
 
 
 async def get_town_media(

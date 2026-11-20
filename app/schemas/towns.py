@@ -20,6 +20,7 @@ class TownOut(BaseModel):
     manager_name: str
     logo_url: str | None
     has_logo: bool = False
+    art_url: str | None = None
     points_per_euro: int = 200
     default_visit_points: int = 10
     default_lang: str = "ca"
@@ -52,12 +53,19 @@ class TownPostalCodeCreate(BaseModel):
 
 
 class TownPublicOut(BaseModel):
-    """Public town rules for the residents app (no auth)."""
+    """Public town card for the residents app (no auth).
+
+    ``art_url`` is the illustration that identifies the town; ``None`` means
+    the app paints its generic one.
+    """
 
     id: str
     name: str
+    slug: str = ""
+    postal_codes: list[str] = []
     logo_url: str | None = None
     has_logo: bool = False
+    art_url: str | None = None
     points_per_euro: int = 200
     default_visit_points: int = 10
     default_lang: str = "ca"

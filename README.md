@@ -32,7 +32,8 @@ Header opcional `X-Active-Role` para fijar el contexto de la petición.
 | POST | `/api/v1/auth/request-otp` | público |
 | POST | `/api/v1/auth/verify-otp` | público |
 | GET/PATCH | `/api/v1/users/me` | autenticado |
-| GET/PATCH | `/api/v1/towns/{id}` (+ `/media`) | admin |
+| GET | `/api/v1/towns` · `/towns/public?postal_code=` | público |
+| GET/PATCH | `/api/v1/towns/{id}` (+ `/media/logo` · `/media/art`) | admin (la imagen se lee sin auth) |
 | CRUD | `/api/v1/shops` · `/shops/me` · `/shops/me/qr` · `/shops/{id}/media` | admin / merchant |
 | GET/PATCH | `/api/v1/shop-categories` · `/{slug}` | público / admin |
 | CRUD | `/api/v1/promotions` | merchant |
@@ -114,6 +115,7 @@ Mismo código **123456**, pueblo **real** (`08380`, `is_fake=false`). Detalle: [
 ```bash
 python -m scripts.seed          # towns reales (Malgrat…) + cuentas QA
 python -m scripts.seed_malgrat_qa
+python -m scripts.seed_town_art --apply  # ilustración de cada pueblo (scripts/seed_media/towns)
 python -m scripts.seed_demo     # usuarios + catálogo fake Demo KM0
 ```
 
