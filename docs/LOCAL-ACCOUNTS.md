@@ -28,22 +28,29 @@ CP `08380`. `is_fake=false`. En el backoffice ves **usuarios reales de Malgrat**
 
 Vecinos de prueba: tu Gmail y Jobmails. **OTP real** (correo), no 123456.
 
-## Baix Montseny (municipio real, piloto en modo demostración)
+## Administradores del piloto (municipios reales, modo demostración)
+
+Un correo por municipio, con su nombre: `<municipio>@km0lab.com`.
 
 | Email | Rol | OTP |
 | ----- | --- | --- |
+| `malgrat@km0lab.com` | admin Malgrat de Mar | `123456` |
 | `baixmontseny@km0lab.com` | admin Baix Montseny | `123456` |
 
-La cuenta no se crea al entrar: se da de alta con
-`python -m scripts.add_admin --town "Baix Montseny" --email baixmontseny@km0lab.com`
-(sin `--apply` solo enseña). El código fijo vale únicamente para ese correo
-y únicamente fuera de producción.
+Las cuentas no se crean al entrar: se dan de alta con
+`python -m scripts.add_admin --town "Malgrat de Mar" --email malgrat@km0lab.com`
+y `python -m scripts.add_admin --town "Baix Montseny" --email baixmontseny@km0lab.com`
+(sin `--apply` solo enseña). El código fijo vale únicamente para esos dos
+correos y únicamente fuera de producción.
 
 **Temporal.** El repositorio es público: cualquiera que lea esto puede
-entrar en UAT como administrador de Baix Montseny. Mientras no haya vecinos
-ni comercios no hay nada que estropear; antes de que los haya, quita el
-correo de `PILOT_ADMIN_EMAILS` (`app/demo.py`) y la cuenta pasará a entrar
-con el código que le llegue por correo.
+entrar en UAT como administrador de esos municipios. Antes de que un
+municipio tenga vecinos o comercios de verdad, quita su correo de
+`PILOT_ADMIN_EMAILS` (`app/demo.py`) y la cuenta pasará a entrar con el
+código que le llegue por correo.
+
+No confundir con `admin-malgrat@km0lab.com` (tabla de arriba): esa es la
+cuenta de pruebas que crea `scripts.seed` en local.
 
 ```bash
 python -m scripts.seed              # pueblos + cuentas QA Malgrat

@@ -62,9 +62,11 @@ python -m scripts.check_flows_mysql  # flujos y concurrencia contra MySQL local
 4. **Código OTP fijo `123456`** solo existe con `ENVIRONMENT=development`
    o `staging`. No lo actives ni lo simules en producción. Las cuentas que
    lo usan son una lista cerrada en `app/demo.py`: no la amplíes sin que
-   se pida. Incluye, **de forma temporal**, al administrador de Baix
-   Montseny (`PILOT_ADMIN_EMAILS`), que es un municipio real: hay que
-   quitarlo antes de que tenga vecinos o comercios de verdad.
+   se pida. Incluye, **de forma temporal**, a los administradores de
+   Malgrat y de Baix Montseny (`PILOT_ADMIN_EMAILS`, un correo
+   `<municipio>@km0lab.com` por municipio), que son municipios reales: hay
+   que quitar cada uno antes de que el suyo tenga vecinos o comercios de
+   verdad.
 5. **Datos: Railway → local.** `scripts/pull_from_railway.py` es el flujo
    diario y nunca escribe en Railway. `scripts/sync_to_railway.py`
    **sobrescribe la base remota**: solo se ejecuta cuando el usuario pide

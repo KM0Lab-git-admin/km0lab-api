@@ -42,17 +42,22 @@ MALGRAT_QA_EMAILS: frozenset[str] = frozenset(
     }
 )
 
-# Baix Montseny (real, is_fake=false) while its pilot runs in demo mode:
-# its administrator enters with 123456 in development/staging only. The
-# account is not created by logging in: ``scripts/add_admin.py`` registers
-# it. Exactly this address, nothing wider.
+# Administrators of the real municipalities (is_fake=false) while the pilot
+# runs in demo mode: they enter with 123456 in development/staging only.
+# One address per municipality, named after it: <municipality>@km0lab.com.
+# The accounts are not created by logging in: ``scripts/add_admin.py``
+# registers them. Exactly these addresses, nothing wider.
 #
-# The repositories are public: anyone who reads this can enter UAT as this
-# administrator. Remove it before the municipality has real residents or
-# shops (then the account logs in with a code sent to its mailbox).
+# The repositories are public: anyone who reads this can enter UAT as these
+# administrators. Remove an address before its municipality has real
+# residents or shops (then the account logs in with a code sent to its
+# mailbox).
 ADMIN_BAIX_MONTSENY_EMAIL = "baixmontseny@km0lab.com"
+ADMIN_MALGRAT_PILOT_EMAIL = "malgrat@km0lab.com"
 
-PILOT_ADMIN_EMAILS: frozenset[str] = frozenset({ADMIN_BAIX_MONTSENY_EMAIL})
+PILOT_ADMIN_EMAILS: frozenset[str] = frozenset(
+    {ADMIN_BAIX_MONTSENY_EMAIL, ADMIN_MALGRAT_PILOT_EMAIL}
+)
 
 FIXED_OTP_EMAILS: frozenset[str] = (
     DEMO_EMAILS | MALGRAT_QA_EMAILS | PILOT_ADMIN_EMAILS

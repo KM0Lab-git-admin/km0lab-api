@@ -63,7 +63,7 @@ FAKE_DEMO_REWARDS: tuple[dict[str, Any], ...] = (
         "type": RewardType.DISCOUNT,
         "name": "[DEMO] 10% de descompte",
         "description": "Descompte del 10% en compra mínima de 20 €",
-        "points_required": 80,
+        "points_required": 1000,
         "value": "10%",
         "stock": 40,
         "conditions": "Mínim 20 € de compra",

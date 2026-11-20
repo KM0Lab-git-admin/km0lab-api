@@ -6,6 +6,7 @@ from sqlalchemy import select
 from app.config import get_settings
 from app.demo import (
     ADMIN_BAIX_MONTSENY_EMAIL,
+    ADMIN_MALGRAT_PILOT_EMAIL,
     DEMO_CODE,
     PILOT_ADMIN_EMAILS,
     is_fixed_otp_email,
@@ -142,16 +143,49 @@ async def _login(client, email: str, code: str = DEMO_CODE):
     )
 
 
-async def test_fixed_code_is_for_that_one_address_only():
-    assert PILOT_ADMIN_EMAILS == {"baixmontseny@km0lab.com"}
+async def test_fixed_code_is_for_those_two_addresses_only():
+    assert PILOT_ADMIN_EMAILS == {"baixmontseny@km0lab.com", "malgrat@km0lab.com"}
     assert is_fixed_otp_email("BaixMontseny@km0lab.com ")
+    assert is_fixed_otp_email(" Malgrat@km0lab.com")
     for other in (
         "baixmontseny@km0lab.cat",
         "baixmontseny2@km0lab.com",
         "admin-baixmontseny@km0lab.com",
-        "malgrat@km0lab.com",
+        "malgrat@km0lab.cat",
+        "blanes@km0lab.com",
+        "lloret@km0lab.com",
     ):
         assert not is_fixed_otp_email(other)
+
+
+async def test_each_pilot_admin_enters_only_their_municipality(
+    client, db_session, monkeypatch
+):
+    mal = await malgrat(db_session)
+    baix = await baix_montseny(db_session)
+    await register_admin(db_session, town=mal, email=ADMIN_MALGRAT_PILOT_EMAIL)
+    await register_admin(db_session, town=baix, email=ADMIN_BAIX_MONTSENY_EMAIL)
+    await db_session.commit()
+
+    for email, town, name in (
+        (ADMIN_MALGRAT_PILOT_EMAIL, mal, "Malgrat de Mar"),
+        (ADMIN_BAIX_MONTSENY_EMAIL, baix, "Baix Montseny"),
+    ):
+        r = await _login(client, email)
+        assert r.status_code == 200, r.text
+        assert r.json()["user"]["municipality_name"] == name
+        headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
+        mine = await client.get(f"{API}/towns/me", headers=headers)
+        assert mine.json()["id"] == town.id
+        other = baix if town is mal else mal
+        assert (
+            await client.get(f"{API}/towns/{other.id}", headers=headers)
+        ).status_code == 403
+
+    # Neither works in production.
+    monkeypatch.setattr(get_settings(), "environment", "production")
+    assert (await _login(client, ADMIN_MALGRAT_PILOT_EMAIL)).status_code == 403
+    assert (await _login(client, ADMIN_BAIX_MONTSENY_EMAIL)).status_code == 403
 
 
 async def test_pilot_admin_enters_with_the_fixed_code(client, db_session, capture_otp):
