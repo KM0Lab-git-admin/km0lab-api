@@ -69,6 +69,33 @@ TOWNS = [
         "postal_codes": [("17310", True)],
         "pilot_merchant_email": None,
     },
+    {
+        "name": "Riells i Viabrea",
+        "entity_name": "Ajuntament de Riells i Viabrea",
+        "contact_email": "admin@riellsiviabrea.cat",
+        "manager_name": "Admin Riells",
+        "admin_email": "admin@riellsiviabrea.cat",
+        "postal_codes": [("17404", True)],
+        "pilot_merchant_email": None,
+    },
+    {
+        "name": "Breda",
+        "entity_name": "Ajuntament de Breda",
+        "contact_email": "admin@breda.cat",
+        "manager_name": "Admin Breda",
+        "admin_email": "admin@breda.cat",
+        "postal_codes": [("17400", True)],
+        "pilot_merchant_email": None,
+    },
+    {
+        "name": "Hostalric",
+        "entity_name": "Ajuntament d'Hostalric",
+        "contact_email": "admin@hostalric.cat",
+        "manager_name": "Admin Hostalric",
+        "admin_email": "admin@hostalric.cat",
+        "postal_codes": [("17450", True)],
+        "pilot_merchant_email": None,
+    },
 ]
 
 
@@ -83,8 +110,17 @@ async def seed() -> None:
         print(f"Demo town ensured: {demo_town.name} (CP 00000)")
 
         # More than just Demo → pilot towns already seeded.
+        # Los municipios nuevos del listado sí se crean, sin tocar los que ya existen.
         town_count = len((await db.execute(select(Town))).scalars().all())
         if town_count > 1:
+            known = {
+                town.name
+                for town in (await db.execute(select(Town))).scalars().all()
+            }
+            for spec in TOWNS:
+                if spec["name"] not in known:
+                    await _seed_town(db, spec)
+                    print(f"Seeded missing town: {spec['name']}")
             towns = (await db.execute(select(Town))).scalars().all()
             for town in towns:
                 if town.slug == demo_town.slug:
@@ -117,99 +153,7 @@ async def seed() -> None:
             return
 
         for spec in TOWNS:
-            town = Town(
-                id=_id(),
-                name=spec["name"],
-                slug=slugify(spec["name"]),
-                entity_name=spec["entity_name"],
-                entity_type="city_council",
-                contact_email=spec["contact_email"],
-                manager_name=spec["manager_name"],
-            )
-            db.add(town)
-            await db.flush()
-
-            primary_cp = None
-            for code, is_primary in spec["postal_codes"]:
-                db.add(
-                    TownPostalCode(
-                        postal_code=code,
-                        town_id=town.id,
-                        is_primary=is_primary,
-                    )
-                )
-                if is_primary:
-                    primary_cp = code
-            await db.flush()
-
-            admin_first, admin_last = split_full_name(spec["manager_name"])
-            admin = User(
-                id=_id(),
-                email=spec["admin_email"],
-                slug=slugify(spec["manager_name"] or spec["admin_email"]),
-                first_name=admin_first,
-                last_name=admin_last,
-                is_resident=True,
-                is_admin=True,
-                is_merchant=False,
-                postal_code=primary_cp,
-                lang="ca",
-                points=0,
-            )
-            db.add(admin)
-
-            merchant_email = (
-                spec["pilot_merchant_email"]
-                or f"comerc@{spec['name'].lower().replace(' ', '')}.cat"
-            )
-            shop = Shop(
-                id=_id(),
-                town_id=town.id,
-                name=f"Botiga Pilot {spec['name']}",
-                emoji="🏪",
-                categories=["food"],
-                contact_email=merchant_email,
-                visit_points=10,
-                address="Carrer Major 1",
-                postal_code=primary_cp,
-                status="active",
-                qr_code=f"qr-{town.id[:8]}",
-                description="Comerç de prova del programa KM0 LAB.",
-            )
-            db.add(shop)
-            await db.flush()
-
-            # Malgrat: same person as resident (app) + merchant (backoffice client).
-            if spec["pilot_merchant_email"]:
-                merchant = User(
-                    id=_id(),
-                    email=spec["pilot_merchant_email"],
-                    slug="usuari-malgrat",
-                    first_name="Usuari",
-                    last_name="Malgrat",
-                    is_resident=True,
-                    is_merchant=True,
-                    is_admin=False,
-                    postal_code=primary_cp,
-                    shop_id=shop.id,
-                    lang="ca",
-                    points=0,
-                )
-                db.add(merchant)
-                await db.flush()
-                await apply_points(
-                    db,
-                    user=merchant,
-                    points=settings.welcome_points,
-                    type="welcome",
-                    town_id=town.id,
-                    description="Welcome bonus",
-                )
-
-            await ensure_town_point_actions(db, town.id, is_fake=False)
-
-            # Same catalog as the demo showcase, as real (is_fake=False) rows.
-            await seed_real_rewards(db, town_id=town.id, shop_id=shop.id)
+            await _seed_town(db, spec)
 
         await db.commit()
         print(f"Seeded {len(TOWNS)} towns with postal codes, admins and catalog.")
@@ -223,6 +167,100 @@ async def seed() -> None:
                 print(line)
         except RuntimeError as exc:
             print(f"Malgrat QA skipped: {exc}")
+
+
+async def _seed_town(db, spec) -> None:
+    town = Town(
+        id=_id(),
+        name=spec["name"],
+        slug=slugify(spec["name"]),
+        entity_name=spec["entity_name"],
+        entity_type="city_council",
+        contact_email=spec["contact_email"],
+        manager_name=spec["manager_name"],
+    )
+    db.add(town)
+    await db.flush()
+
+    primary_cp = None
+    for code, is_primary in spec["postal_codes"]:
+        db.add(
+            TownPostalCode(
+                postal_code=code,
+                town_id=town.id,
+                is_primary=is_primary,
+            )
+        )
+        if is_primary:
+            primary_cp = code
+    await db.flush()
+
+    admin_first, admin_last = split_full_name(spec["manager_name"])
+    admin = User(
+        id=_id(),
+        email=spec["admin_email"],
+        slug=slugify(spec["manager_name"] or spec["admin_email"]),
+        first_name=admin_first,
+        last_name=admin_last,
+        is_resident=True,
+        is_admin=True,
+        is_merchant=False,
+        postal_code=primary_cp,
+        lang="ca",
+        points=0,
+    )
+    db.add(admin)
+
+    merchant_email = (
+        spec["pilot_merchant_email"]
+        or f"comerc@{spec['name'].lower().replace(' ', '')}.cat"
+    )
+    shop = Shop(
+        id=_id(),
+        town_id=town.id,
+        name=f"Botiga Pilot {spec['name']}",
+        emoji="🏪",
+        categories=["food"],
+        contact_email=merchant_email,
+        visit_points=10,
+        address="Carrer Major 1",
+        postal_code=primary_cp,
+        status="active",
+        qr_code=f"qr-{town.id[:8]}",
+        description="Comerç de prova del programa KM0 LAB.",
+    )
+    db.add(shop)
+    await db.flush()
+
+    # Malgrat: same person as resident (app) + merchant (backoffice client).
+    if spec["pilot_merchant_email"]:
+        merchant = User(
+            id=_id(),
+            email=spec["pilot_merchant_email"],
+            slug="usuari-malgrat",
+            first_name="Usuari",
+            last_name="Malgrat",
+            is_resident=True,
+            is_merchant=True,
+            is_admin=False,
+            postal_code=primary_cp,
+            shop_id=shop.id,
+            lang="ca",
+            points=0,
+        )
+        db.add(merchant)
+        await db.flush()
+        await apply_points(
+            db,
+            user=merchant,
+            points=settings.welcome_points,
+            type="welcome",
+            town_id=town.id,
+            description="Welcome bonus",
+        )
+
+    await ensure_town_point_actions(db, town.id, is_fake=False)
+    await seed_real_rewards(db, town_id=town.id, shop_id=shop.id)
 
 
 if __name__ == "__main__":
