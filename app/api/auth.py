@@ -7,6 +7,9 @@ plus town/shop scope.
 Fixed OTP 123456 (dev/staging only):
 - Demo KM0 (is_fake): resident@ / merchant@ / admin@km0lab.com
 - Malgrat real: admin-malgrat@ / merchant1-malgrat@ / merchant2-malgrat@km0lab.com
+- QA territory (is_fake, CP 9999x): qa+<anything>@km0lab.com. Unlike the
+  two above, these go through the normal signup flow, so tests can create
+  brand-new residents without a mailbox. See ``app/qa.py``.
 """
 
 import secrets
@@ -21,13 +24,16 @@ from app.db import get_db
 from app.demo import (
     DEMO_CODE,
     demo_enabled,
+    desired_user_is_fake,
     is_demo_email,
     is_fixed_otp_email,
     is_malgrat_qa_email,
+    sync_user_fake_partition,
 )
 from app.catalog.email_otp import normalize_otp_lang
 from app.email import send_otp_email
 from app.models import OtpCode, User
+from app.qa import QA_POSTAL_CODE, is_qa_email, is_qa_postal_code
 from app.ratelimit import MAX_OTP_ATTEMPTS, limiter
 from app.roles import (
     ROLE_ADMIN,
@@ -47,7 +53,11 @@ from app.services.invitations import (
     record_event,
 )
 from app.services.slugs import allocate_user_slug
-from app.services.towns import assign_user_to_town, load_user_with_town
+from app.services.towns import (
+    assign_user_to_town,
+    get_postal_code,
+    load_user_with_town,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 settings = get_settings()
@@ -174,38 +184,56 @@ async def verify_otp_endpoint(
                 )
             return await _auth_out(db, user)
 
-    now = datetime.now(timezone.utc)
-
-    result = await db.execute(
-        select(OtpCode)
-        .where(
-            OtpCode.email == email,
-            OtpCode.consumed == 0,
-            OtpCode.expires_at >= now,
+    # QA territory accounts: the fixed code was checked above and no OTP row
+    # exists; from here on they follow the same path as any other signup.
+    qa_account = is_qa_email(email)
+    qa_postal = None
+    if qa_account:
+        wanted = (payload.postal_code or "").strip()
+        qa_postal = await get_postal_code(
+            db, wanted if is_qa_postal_code(wanted) else QA_POSTAL_CODE
         )
-        .order_by(OtpCode.created_at.desc())
-    )
-    otp = result.scalars().first()
+        if qa_postal is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="QA territory not seeded — run: python -m scripts.seed_qa",
+            )
 
-    bad = HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST, detail="Codi invàlid o caducat"
-    )
-    if not otp:
-        raise bad
+    otp: OtpCode | None = None
+    if not qa_account:
+        now = datetime.now(timezone.utc)
 
-    if not verify_otp(payload.code, otp.code_hash):
-        consumed = 1 if otp.attempts + 1 >= MAX_OTP_ATTEMPTS else 0
+        result = await db.execute(
+            select(OtpCode)
+            .where(
+                OtpCode.email == email,
+                OtpCode.consumed == 0,
+                OtpCode.expires_at >= now,
+            )
+            .order_by(OtpCode.created_at.desc())
+        )
+        otp = result.scalars().first()
+
+        bad = HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Codi invàlid o caducat",
+        )
+        if not otp:
+            raise bad
+
+        if not verify_otp(payload.code, otp.code_hash):
+            consumed = 1 if otp.attempts + 1 >= MAX_OTP_ATTEMPTS else 0
+            await db.execute(
+                update(OtpCode)
+                .where(OtpCode.id == otp.id)
+                .values(attempts=otp.attempts + 1, consumed=consumed)
+            )
+            await db.commit()
+            raise bad
+
         await db.execute(
-            update(OtpCode)
-            .where(OtpCode.id == otp.id)
-            .values(attempts=otp.attempts + 1, consumed=consumed)
+            update(OtpCode).where(OtpCode.id == otp.id).values(consumed=1)
         )
-        await db.commit()
-        raise bad
-
-    await db.execute(
-        update(OtpCode).where(OtpCode.id == otp.id).values(consumed=1)
-    )
 
     user = (
         await db.execute(select(User).where(User.email == email))
@@ -220,7 +248,8 @@ async def verify_otp_endpoint(
             select(Shop).where(
                 Shop.contact_email == email,
                 Shop.status == "pending",
-                Shop.is_fake.is_(False),
+                # A QA account only ever activates a QA (fake) shop.
+                Shop.is_fake.is_(qa_account),
             )
         )
     ).scalars().first()
@@ -244,7 +273,7 @@ async def verify_otp_endpoint(
                 slug=await allocate_user_slug(db, email=email),
                 shop_id=shop.id,
                 points=0,
-                is_fake=False,
+                is_fake=desired_user_is_fake(email, None),
                 **merchant_flags,
             )
             db.add(user)
@@ -265,7 +294,7 @@ async def verify_otp_endpoint(
             email=email,
             slug=await allocate_user_slug(db, email=email),
             points=0,
-            is_fake=False,
+            is_fake=desired_user_is_fake(email, None),
             **flags_from_roles([ROLE_RESIDENT]),
         )
         db.add(user)
@@ -273,9 +302,16 @@ async def verify_otp_endpoint(
         grant_welcome = True
 
     if user is not None:
-        await apply_invitee_postal_code(
-            db, user, payload.postal_code
-        )
+        if qa_postal is not None:
+            # QA accounts never leave the QA territory.
+            if not is_qa_postal_code(user.postal_code):
+                user.postal_code = qa_postal.postal_code
+                user.postal_ref = qa_postal
+        else:
+            await apply_invitee_postal_code(db, user, payload.postal_code)
+        # Settle the partition before granting points, so the welcome bonus
+        # and its ledger row land on the same side as the user.
+        sync_user_fake_partition(user)
 
     invite_code = (payload.invite_code or "").strip().lower() or (
         otp.invite_code if otp else None

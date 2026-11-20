@@ -1,6 +1,7 @@
 """KM0 LAB API — domain backend (auth, towns, shops, points, rewards)."""
 
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -15,6 +16,7 @@ from app.api import (
     payments,
     points,
     promotions,
+    qa,
     redemptions,
     residents,
     rewards,
@@ -80,11 +82,23 @@ for module in (
     residents,
     stats,
     invites,
+    qa,
 ):
     app.include_router(module.router, prefix=API_V1)
 app.include_router(invites.admin_router, prefix=API_V1)
 
 
+def _deployed_commit() -> str | None:
+    """Commit that Railway built this deployment from (None in local)."""
+    sha = os.getenv("RAILWAY_GIT_COMMIT_SHA", "").strip()
+    return sha or None
+
+
 @app.get(f"{API_V1}/health", tags=["health"])
 async def health():
-    return {"status": "healthy", "version": "0.2.0"}
+    return {
+        "status": "healthy",
+        "version": "0.2.0",
+        "environment": settings.environment,
+        "commit": _deployed_commit(),
+    }

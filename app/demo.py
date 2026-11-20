@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.config import get_settings
+from app.qa import is_qa_email, is_qa_postal_code
 from app.roles import ROLE_ADMIN, ROLE_MERCHANT, ROLE_RESIDENT
 
 DEMO_CODE = "123456"
@@ -65,23 +66,30 @@ def is_malgrat_qa_email(email: str) -> bool:
 
 
 def is_fixed_otp_email(email: str) -> bool:
-    """123456 bypass (dev/staging). Demo partition + Malgrat QA."""
-    return email.lower().strip() in FIXED_OTP_EMAILS
+    """123456 bypass (dev/staging). Demo partition, Malgrat QA, QA territory."""
+    return email.lower().strip() in FIXED_OTP_EMAILS or is_qa_email(email)
 
 
 def is_demo_postal_code(postal_code: str | None) -> bool:
     return (postal_code or "").strip() == DEMO_POSTAL_CODE
 
 
+def is_fake_postal_code(postal_code: str | None) -> bool:
+    """Postal codes whose town lives on the ``is_fake`` partition."""
+    return is_demo_postal_code(postal_code) or is_qa_postal_code(postal_code)
+
+
 def desired_user_is_fake(email: str, postal_code: str | None) -> bool:
     """Partition a resident should live in.
 
     - Seeded demo emails always stay on the fake partition.
-    - Everyone else: fake iff their postal code is Demo KM0 (00000).
+    - QA accounts (``qa+…@km0lab.com``) always stay on the fake partition.
+    - Everyone else: fake iff their postal code is Demo KM0 (00000) or a
+      QA territory one (9999x).
     """
-    if is_demo_email(email):
+    if is_demo_email(email) or is_qa_email(email):
         return True
-    return is_demo_postal_code(postal_code)
+    return is_fake_postal_code(postal_code)
 
 
 def sync_user_fake_partition(user, postal_code: str | None = None) -> bool:
@@ -102,11 +110,12 @@ def resolve_public_demo(postal_code: str, requested: bool) -> bool:
     """Partition for public catalogs.
 
     - Demo CP (00000) always returns the fake/showcase partition.
+    - QA territory CPs (9999x) always return the fake partition.
     - Malgrat real (08380) never returns fake via the public API.
     - Other CPs keep the caller's ``demo`` flag (tests / future towns).
     """
     cp = postal_code.strip()
-    if cp == DEMO_POSTAL_CODE:
+    if cp == DEMO_POSTAL_CODE or is_qa_postal_code(cp):
         return True
     if cp == MALGRAT_CP:
         return False

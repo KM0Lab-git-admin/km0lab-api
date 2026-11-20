@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     invite_person_points: int = 100
     invite_business_points: int = 500
 
+    # Territorio QA (app/qa.py): clave de POST /qa/prepare. Vacía = cerrado.
+    # Nunca se usa en production, aunque se configure.
+    qa_token: str = ""
+
     # Email: preferir Resend HTTP (RESEND_API_KEY). SMTP queda como fallback.
     # Sin key ni SMTP_HOST → el OTP se imprime en log (útil en local/UAT).
     resend_api_key: str = ""

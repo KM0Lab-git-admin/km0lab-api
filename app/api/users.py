@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_db
 from app.demo import sync_user_fake_partition
 from app.deps import get_current_user
+from app.qa import is_qa_email, is_qa_postal_code
 from app.models import User
 from app.schemas import UpdateUserIn, UserOut
 from app.services.slugs import allocate_user_slug
@@ -30,6 +31,11 @@ async def update_me(
     data = payload.model_dump(exclude_unset=True)
     if "postal_code" in data:
         code = data["postal_code"]
+        if is_qa_email(user.email) and not is_qa_postal_code(code):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="QA accounts cannot leave the QA territory",
+            )
         if code is None:
             user.postal_code = None
             user.postal_ref = None

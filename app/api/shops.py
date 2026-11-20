@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.db import get_db
 from app.demo import resolve_public_demo, sync_user_fake_partition
+from app.qa import is_qa_postal_code
 from app.deps import (
     assert_shop_scope,
     assert_town_scope,
@@ -244,13 +245,15 @@ async def public_shop_signup(
             )
 
     email = payload.contact_email.lower()
+    # Shops registered in the QA territory are test data (erasable).
+    shop_is_fake = is_qa_postal_code(postal.postal_code)
     duplicate = (
         await db.execute(
             select(Shop).where(
                 Shop.town_id == postal.town_id,
                 Shop.contact_email == email,
                 Shop.status.in_(("pending", "active")),
-                Shop.is_fake.is_(False),
+                Shop.is_fake.is_(shop_is_fake),
             )
         )
     ).scalars().first()
@@ -273,7 +276,7 @@ async def public_shop_signup(
         website=payload.website,
         description=payload.description,
         status="pending",
-        is_fake=False,
+        is_fake=shop_is_fake,
     )
     db.add(shop)
     await db.flush()
