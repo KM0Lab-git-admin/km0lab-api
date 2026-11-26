@@ -5,7 +5,7 @@ Orden de preferencia:
 2. SMTP (`SMTP_HOST`) — fallback.
 3. Sin ninguno → log `[DEV] OTP…` (no se envía correo).
 
-Misma plantilla HTML+texto para app y backoffice (Lovable EmailOtpTemplate).
+Misma plantilla HTML+texto para app y backoffice (app/catalog/email_otp.py).
 """
 
 import logging
@@ -36,7 +36,7 @@ def _otp_parts(
 ) -> tuple[str, str, str]:
     resolved = normalize_otp_lang(lang)
     minutes = settings.otp_ttl_minutes
-    subject = otp_subject(resolved)
+    subject = otp_subject(code, resolved)
     text = render_otp_text(
         code=code, minutes=minutes, lang=resolved, email=email
     )
