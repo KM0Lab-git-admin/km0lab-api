@@ -133,8 +133,15 @@ la cuenta de demostración. Cada municipio real tiene una copia.
   toca. Mira siempre la salida sin `--apply`: avisa de cada cambio de puntos.
 - La copia se reconoce por `rewards.catalog_id`, así que renombrar un
   premio del catálogo renombra sus copias en vez de duplicarlas.
+- **Las existencias son de cada municipio** (bajan con cada canje) y no hay
+  pantalla que las cambie: `scripts/set_reward_stock.py --town … --reward …
+  --stock N` (sin `--apply` solo enseña). Sirve para poner tope a un piloto
+  y para reponer. A cero el premio queda agotado; al reponer vuelve a
+  ofrecerse, salvo que el administrador lo tenga apagado.
 - Las acciones de puntos **no** son del catálogo: cada municipio configura
-  las suyas.
+  las suyas. **Una acción apagada da cero puntos**: el valor por defecto de
+  la configuración (`welcome_points`, `invite_*_points`) solo se usa en un
+  municipio que nunca tuvo esa acción.
 
 ## Versiones y compatibilidad
 
