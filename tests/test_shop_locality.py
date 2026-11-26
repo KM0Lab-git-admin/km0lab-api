@@ -2,7 +2,8 @@
 
 import pytest
 
-from app.models import Shop
+from app.models import Shop, User
+from app.security import create_access_token
 from tests._municipalities import (
     API,
     admin_headers,
@@ -164,3 +165,55 @@ async def test_shops_stay_inside_their_municipality(client, db_session):
         f"{API}/shops/{peix.json()['id']}", json={"name": "Meu"}, headers=mal_admin
     )
     assert r.status_code == 403
+
+
+# ── Piloto: las lecturas de vecinos no llevan el código de escaneo ───
+
+
+async def test_public_reads_hide_the_scan_code_and_the_contact_email(
+    client, db_session
+):
+    town = await malgrat(db_session)
+    headers = await admin_headers(db_session, town, "08380")
+    created = await client.post(
+        f"{API}/shops",
+        json=_shop("Forn", postal_code="08380", tax_id="B12345678"),
+        headers=headers,
+    )
+    shop_id = created.json()["id"]
+    await client.patch(
+        f"{API}/shops/{shop_id}", json={"status": "active"}, headers=headers
+    )
+    resident = User(email="veina@test.cat", slug="veina", postal_code="08380")
+    db_session.add(resident)
+    await db_session.commit()
+    resident_headers = {
+        "Authorization": "Bearer "
+        + create_access_token(resident.id, roles=["resident"])
+    }
+
+    # El administrador sigue viéndolo todo.
+    mine = (await client.get(f"{API}/shops/{shop_id}", headers=headers)).json()
+    assert mine["qr_code"] and mine["has_qr"] is True
+    assert mine["contact_email"] == "forn@test.cat"
+    assert mine["tax_id"] == "B12345678"
+
+    # Sin sesión, con sesión de vecino en la lista, y pidiendo la ficha.
+    public = (
+        await client.get(f"{API}/shops/public", params={"postal_code": "08380"})
+    ).json()
+    for_me = (
+        await client.get(f"{API}/shops/for-me", headers=resident_headers)
+    ).json()
+    one = (
+        await client.get(f"{API}/shops/{shop_id}", headers=resident_headers)
+    ).json()
+    for card in (public[0], for_me[0], one):
+        assert card["name"] == "Forn"
+        assert card["qr_code"] is None
+        assert card["has_qr"] is True  # la app sigue sabiendo que tiene QR
+        assert card["contact_email"] == ""
+        assert card["tax_id"] is None
+    # Ni rastro del código en ninguna respuesta de vecino.
+    for body in (public, for_me, one):
+        assert mine["qr_code"] not in str(body)

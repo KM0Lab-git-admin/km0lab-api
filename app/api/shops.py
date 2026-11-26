@@ -88,7 +88,11 @@ async def _shop_out(
     *,
     lang: str | None = None,
     fallback_lang: str | None = None,
+    public: bool = False,
 ) -> ShopOut:
+    """``public``: the card residents and visitors get. It leaves out what
+    only the shop and its admin need — the scan code (it would let anyone
+    collect the visit without going) and the contact email and tax id."""
     kinds = await media_kinds_present(db, shop.id)
     has_logo = "logo" in kinds
     has_hero = "hero" in kinds
@@ -106,6 +110,12 @@ async def _shop_out(
             "town_name": shop.locality.name
             if shop.locality is not None
             else (town.name if town else None),
+            "has_qr": bool(shop.qr_code),
+            **(
+                {"qr_code": None, "contact_email": "", "tax_id": None}
+                if public
+                else {}
+            ),
             "has_logo": has_logo,
             "has_hero": has_hero,
             "logo_url": media_public_path(shop.id, "logo")
@@ -237,7 +247,8 @@ async def list_shops_public(
         )
     ).scalars().all()
     return [
-        await _shop_out(db, s, lang=lang, fallback_lang=fallback) for s in rows
+        await _shop_out(db, s, lang=lang, fallback_lang=fallback, public=True)
+        for s in rows
     ]
 
 
@@ -397,7 +408,9 @@ async def _resident_shop_catalog(
     now = datetime.now(timezone.utc)
     out: list[ShopResidentOut] = []
     for shop in rows:
-        base = await _shop_out(db, shop, lang=lang, fallback_lang=fallback)
+        base = await _shop_out(
+            db, shop, lang=lang, fallback_lang=fallback, public=True
+        )
         last = last_by_shop.get(shop.id)
         scanned = last is not None
         available_at: str | None = None
@@ -715,12 +728,18 @@ async def get_shop(
     shop = await db.get(Shop, shop_id)
     if not shop:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Shop not found")
+    # A resident gets the public card; the admin and the shop, all of it.
+    public = True
     if user.has_role("admin"):
         assert_town_scope(user, shop.town_id)
+        public = False
     elif user.has_role("merchant"):
         assert_shop_scope(user, shop.id)
+        public = False
     fallback = await _default_lang_for_shop(db, shop)
-    return await _shop_out(db, shop, lang=lang, fallback_lang=fallback)
+    return await _shop_out(
+        db, shop, lang=lang, fallback_lang=fallback, public=public
+    )
 
 
 @router.patch("/{shop_id}", response_model=ShopOut)

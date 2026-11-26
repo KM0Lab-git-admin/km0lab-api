@@ -31,7 +31,11 @@ class ShopOut(BaseModel):
     i18n_source_lang: str = "ca"
     opening_hours: OpeningHours | None
     status: str
+    # The scan code. Null in every read that is not the shop's own or
+    # its admin's: whoever knows it can collect the visit from anywhere.
     qr_code: str | None
+    # Whether the shop has a QR, for readers that do not get the code.
+    has_qr: bool = False
     is_fake: bool = False
     created_at: datetime
     updated_at: datetime
