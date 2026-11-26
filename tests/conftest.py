@@ -16,6 +16,15 @@ from app.catalog.shop_categories import (
     DEFAULT_SHOP_CATEGORY_EMOJIS,
 )
 from app.ratelimit import limiter
+from app.services import public_towns
+
+
+@pytest.fixture(autouse=True)
+def _forget_public_towns():
+    """Each test has its own database: nothing carried over in memory."""
+    public_towns.invalidate()
+    yield
+    public_towns.invalidate()
 
 
 @pytest_asyncio.fixture

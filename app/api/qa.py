@@ -21,6 +21,7 @@ from app.db import get_db
 from app.demo import demo_enabled
 from app.qa import QA_POSTAL_CODE
 from app.services.qa_purge import QaPurgeRefused, purge_qa_territory
+from app.services import public_towns
 from app.services.qa_territory import ensure_qa_territory
 
 router = APIRouter(prefix="/qa", tags=["qa"])
@@ -70,6 +71,8 @@ async def prepare_qa_territory(
 
     fixture = await ensure_qa_territory(db)
     await db.commit()
+    # The test territory may have just been created or reset.
+    public_towns.invalidate()
     return {
         "purge": report.as_dict(),
         "fixture": {"postal_code": QA_POSTAL_CODE, **fixture},

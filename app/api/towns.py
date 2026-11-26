@@ -3,16 +3,16 @@
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import defer, lazyload, selectinload
+from sqlalchemy.orm import selectinload
 
 from app.db import get_db
-from app.demo import DEMO_TOWN_SLUG
 from app.deps import assert_town_scope, require_admin
 from app.models import Locality, Town, TownMedia, TownPostalCode, User
-from app.qa import QA_SLUG_PREFIX
 from app.schemas import TownMediaOut, TownOut, TownPublicOut, TownUpdate
 from app.schemas.towns import LocalityOut
+from app.services import public_towns
 from app.services.localities import art_urls, get_locality_art, list_localities
+from app.services.public_towns import public_town_card, public_town_list
 from app.services.media_http import media_bytes_response, media_not_found_response
 from app.services.town_media import (
     delete_town_media,
@@ -21,7 +21,6 @@ from app.services.town_media import (
     media_version,
     upsert_town_media,
 )
-from app.services.towns import get_postal_code
 from app.utils.slug import slugify
 
 router = APIRouter(prefix="/towns", tags=["towns"])
@@ -53,29 +52,6 @@ def _to_out(town: Town) -> TownOut:
         data.logo_url = media_public_path(town.id, "logo")
     data.art_url = _art_url(town.id, media)
     return data
-
-
-def _to_public(town: Town, media: list[TownMedia] | None = None) -> TownPublicOut:
-    """``media`` lets a listing pass rows loaded without their binary data."""
-    rows = list(town.media or []) if media is None else media
-    has_logo = any(m.kind == "logo" for m in rows)
-    logo_url = media_public_path(town.id, "logo") if has_logo else town.logo_url
-    codes = sorted(
-        town.postal_codes or [], key=lambda c: (not c.is_primary, c.postal_code)
-    )
-    return TownPublicOut(
-        id=town.id,
-        name=town.name,
-        slug=town.slug,
-        postal_codes=[c.postal_code for c in codes],
-        logo_url=logo_url,
-        has_logo=has_logo,
-        art_url=_art_url(town.id, rows),
-        points_per_euro=town.points_per_euro,
-        default_visit_points=town.default_visit_points,
-        default_lang=town.default_lang,
-        expiry_months=town.expiry_months,
-    )
 
 
 async def _locality_cards(
@@ -113,29 +89,6 @@ async def _admin_out(db: AsyncSession, town: Town) -> TownOut:
     return out
 
 
-def _as_locality(
-    card: TownPublicOut,
-    town: Town,
-    home: LocalityOut | None,
-    localities: list[LocalityOut],
-) -> TownPublicOut:
-    """The public card seen from one town of the municipality."""
-    update: dict = {
-        "municipality_id": town.id,
-        "municipality_name": town.name,
-        "localities": localities,
-    }
-    if home is not None:
-        update.update(
-            name=home.name,
-            slug=home.slug,
-            postal_codes=home.postal_codes,
-            art_url=home.art_url,
-            locality_id=home.id,
-        )
-    return card.model_copy(update=update)
-
-
 @router.get("", response_model=list[TownPublicOut])
 async def list_towns_public(db: AsyncSession = Depends(get_db)):
     """Towns the residents app can offer (no auth), sorted by name.
@@ -143,49 +96,9 @@ async def list_towns_public(db: AsyncSession = Depends(get_db)):
     One entry per town a resident can live in: a municipality that groups
     several towns contributes one entry for each. Leaves out the sales demo
     and the QA territory: they are modes of the product, not places a
-    resident picks.
+    resident picks. Served from memory (``app/services/public_towns``).
     """
-    towns = list(
-        (
-            await db.execute(
-                select(Town)
-                .options(selectinload(Town.postal_codes), lazyload(Town.media))
-                .where(
-                    Town.slug != DEMO_TOWN_SLUG,
-                    Town.slug.not_like(f"{QA_SLUG_PREFIX}%"),
-                )
-                .order_by(Town.name)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    if not towns:
-        return []
-    # Only what the URLs need: the images themselves stay in the database.
-    media_rows = (
-        (
-            await db.execute(
-                select(TownMedia)
-                .options(defer(TownMedia.data))
-                .where(TownMedia.town_id.in_([t.id for t in towns]))
-            )
-        )
-        .scalars()
-        .all()
-    )
-    by_town: dict[str, list[TownMedia]] = {}
-    for row in media_rows:
-        by_town.setdefault(row.town_id, []).append(row)
-    out: list[TownPublicOut] = []
-    for town in towns:
-        card = _to_public(town, by_town.get(town.id, []))
-        localities, _ = await _locality_cards(db, town)
-        if not localities:
-            out.append(_as_locality(card, town, None, []))
-            continue
-        out.extend(_as_locality(card, town, loc, localities) for loc in localities)
-    return sorted(out, key=lambda c: c.name.casefold())
+    return await public_town_list(db)
 
 
 @router.get("/me", response_model=TownOut)
@@ -216,18 +129,13 @@ async def get_town_public(
     Resolves ``postal_code`` → town and returns logo + point rules used when
     scanning QRs (``default_visit_points``) and converting euros.
     """
-    postal = await get_postal_code(db, postal_code.strip())
-    if postal is None:
+    card = await public_town_card(db, postal_code.strip())
+    if card is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
             detail="Unknown postal code",
         )
-    town = await _load_town(db, postal.town_id)
-    if town is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Town not found")
-    localities, _ = await _locality_cards(db, town)
-    home = next((loc for loc in localities if loc.id == postal.locality_id), None)
-    return _as_locality(_to_public(town), town, home, localities)
+    return card
 
 
 @router.api_route("/localities/{locality_id}/art", methods=["GET", "HEAD"])
@@ -294,6 +202,7 @@ async def update_town(
     for field, value in data.items():
         setattr(town, field, value)
     await db.commit()
+    public_towns.invalidate()
     town = await _load_town(db, town_id)
     return await _admin_out(db, town)  # type: ignore[arg-type]
 
@@ -321,6 +230,7 @@ async def upload_town_media(
     if kind == "logo":
         town.logo_url = out.url
     await db.commit()
+    public_towns.invalidate()
     if kind != "logo":
         out.url = media_public_path(town.id, kind, media_version(row))
     return out
@@ -343,6 +253,7 @@ async def remove_town_media(
     if kind == "logo":
         town.logo_url = None
     await db.commit()
+    public_towns.invalidate()
 
 
 @router.api_route("/{town_id}/media/{kind}", methods=["GET", "HEAD"])

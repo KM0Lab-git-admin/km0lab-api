@@ -436,4 +436,10 @@ async def group_towns(
         if first is not None:
             first.is_primary = True
     await db.flush()
+    # The towns just changed municipality: what the app reads about them
+    # in memory is no longer true. (Run from a script, in another process,
+    # this does nothing there: the API catches up within its TTL.)
+    from app.services import public_towns
+
+    public_towns.invalidate()
     return report
