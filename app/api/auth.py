@@ -13,6 +13,7 @@ Fixed OTP 123456 (dev/staging only):
 """
 
 import secrets
+import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -60,6 +61,8 @@ from app.services.towns import (
     load_user_with_town,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/auth", tags=["auth"])
 settings = get_settings()
 
@@ -77,6 +80,47 @@ def _otp_request_limit() -> str:
 def _otp_verify_limit() -> str:
     env = get_settings().environment.lower().strip()
     return _OTP_VERIFY_LIMITS.get(env, "10/hour")
+
+
+# Why a code was refused, so the app can say it instead of a blanket
+# "wrong code". ``detail`` is ``{"code", "message"}``.
+OTP_INVALID = "otp_invalid"
+OTP_EXPIRED = "otp_expired"
+OTP_TOO_MANY_ATTEMPTS = "otp_too_many_attempts"
+OTP_SEND_FAILED = "otp_send_failed"
+
+
+def _otp_error(status_code: int, code: str, message: str) -> HTTPException:
+    return HTTPException(
+        status_code=status_code, detail={"code": code, "message": message}
+    )
+
+
+async def _no_live_code_error(db: AsyncSession, email: str) -> HTTPException:
+    """No usable code for this email: say whether it expired or burned out."""
+    last = (
+        await db.execute(
+            select(OtpCode)
+            .where(OtpCode.email == email)
+            .order_by(OtpCode.created_at.desc())
+            .limit(1)
+        )
+    ).scalars().first()
+    if last is None:
+        return _otp_error(
+            status.HTTP_400_BAD_REQUEST, OTP_INVALID, "Codi incorrecte."
+        )
+    if last.attempts >= MAX_OTP_ATTEMPTS:
+        return _otp_error(
+            status.HTTP_400_BAD_REQUEST,
+            OTP_TOO_MANY_ATTEMPTS,
+            "Massa intents. Demana un codi nou.",
+        )
+    return _otp_error(
+        status.HTTP_400_BAD_REQUEST,
+        OTP_EXPIRED,
+        "Aquest codi ha caducat. Demana'n un de nou.",
+    )
 
 
 def _generate_code() -> str:
@@ -121,11 +165,9 @@ async def request_otp(
         # No email sent — client proceeds with fixed code 123456.
         return MessageOut(message="Si el correu és vàlid, rebràs un codi.")
 
-    await db.execute(
-        update(OtpCode)
-        .where(OtpCode.email == email, OtpCode.consumed == 0)
-        .values(consumed=1)
-    )
+    # Earlier codes stay valid until they expire: whoever asks twice and
+    # opens the first email must still get in. Wrong guesses count against
+    # every live code at once (see verify), so this opens no extra guesses.
     code = _generate_code()
     otp = OtpCode(
         email=email,
@@ -147,7 +189,21 @@ async def request_otp(
     if not lang:
         stored = await db.scalar(select(User.lang).where(User.email == email))
         lang = stored
-    await send_otp_email(payload.email, code, lang=normalize_otp_lang(lang))
+    try:
+        await send_otp_email(payload.email, code, lang=normalize_otp_lang(lang))
+    except Exception:
+        # The code never reached anyone: retire it and say so. Codes sent
+        # before are untouched, so the person is not left without a valid one.
+        logger.exception("OTP email could not be sent to %s", email)
+        await db.execute(
+            update(OtpCode).where(OtpCode.id == otp.id).values(consumed=1)
+        )
+        await db.commit()
+        raise _otp_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            OTP_SEND_FAILED,
+            "No hem pogut enviar el correu. Torna-ho a provar d'aquí a uns minuts.",
+        ) from None
     return MessageOut(message="Si el correu és vàlid, rebràs un codi.")
 
 
@@ -217,36 +273,56 @@ async def verify_otp_endpoint(
     if not qa_account:
         now = datetime.now(timezone.utc)
 
-        result = await db.execute(
-            select(OtpCode)
-            .where(
-                OtpCode.email == email,
-                OtpCode.consumed == 0,
-                OtpCode.expires_at >= now,
+        live = (
+            (
+                await db.execute(
+                    select(OtpCode)
+                    .where(
+                        OtpCode.email == email,
+                        OtpCode.consumed == 0,
+                        OtpCode.expires_at >= now,
+                    )
+                    .order_by(OtpCode.created_at.desc())
+                )
             )
-            .order_by(OtpCode.created_at.desc())
+            .scalars()
+            .all()
         )
-        otp = result.scalars().first()
+        if not live:
+            raise await _no_live_code_error(db, email)
 
-        bad = HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Codi invàlid o caducat",
+        otp = next(
+            (c for c in live if verify_otp(payload.code, c.code_hash)), None
         )
-        if not otp:
-            raise bad
-
-        if not verify_otp(payload.code, otp.code_hash):
-            consumed = 1 if otp.attempts + 1 >= MAX_OTP_ATTEMPTS else 0
-            await db.execute(
-                update(OtpCode)
-                .where(OtpCode.id == otp.id)
-                .values(attempts=otp.attempts + 1, consumed=consumed)
-            )
+        if otp is None:
+            # A wrong guess counts against every live code, so asking for
+            # more codes does not buy more guesses.
+            exhausted = True
+            for candidate in live:
+                attempts = candidate.attempts + 1
+                dead = attempts >= MAX_OTP_ATTEMPTS
+                exhausted = exhausted and dead
+                await db.execute(
+                    update(OtpCode)
+                    .where(OtpCode.id == candidate.id)
+                    .values(attempts=attempts, consumed=1 if dead else 0)
+                )
             await db.commit()
-            raise bad
+            if exhausted:
+                raise _otp_error(
+                    status.HTTP_400_BAD_REQUEST,
+                    OTP_TOO_MANY_ATTEMPTS,
+                    "Massa intents. Demana un codi nou.",
+                )
+            raise _otp_error(
+                status.HTTP_400_BAD_REQUEST, OTP_INVALID, "Codi incorrecte."
+            )
 
+        # One code, one login: the others die with it.
         await db.execute(
-            update(OtpCode).where(OtpCode.id == otp.id).values(consumed=1)
+            update(OtpCode)
+            .where(OtpCode.id.in_([c.id for c in live]))
+            .values(consumed=1)
         )
 
     user = (
