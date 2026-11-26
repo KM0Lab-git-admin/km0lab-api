@@ -44,3 +44,8 @@ limiter = Limiter(key_func=rate_limit_key)
 # Máximo de intentos de verificación por código OTP antes de invalidarlo
 # (anti fuerza bruta; complementa al rate limit por IP).
 MAX_OTP_ATTEMPTS = 5
+
+# Códigos OTP utilizables a la vez por correo. Pedir uno nuevo no anula los
+# anteriores, y cada intento se compara con todos los vivos: este tope es
+# lo que acota cuánto rinde un intento (y, con él, el límite por IP).
+MAX_LIVE_OTP_CODES = 3

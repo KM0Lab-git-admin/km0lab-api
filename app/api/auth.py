@@ -36,7 +36,7 @@ from app.catalog.email_otp import normalize_otp_lang
 from app.email import send_otp_email
 from app.models import OtpCode, User
 from app.qa import QA_POSTAL_CODE, is_qa_email, is_qa_postal_code
-from app.ratelimit import MAX_OTP_ATTEMPTS, limiter
+from app.ratelimit import MAX_LIVE_OTP_CODES, MAX_OTP_ATTEMPTS, limiter
 from app.roles import (
     ROLE_ADMIN,
     ROLE_MERCHANT,
@@ -167,7 +167,8 @@ async def request_otp(
 
     # Earlier codes stay valid until they expire: whoever asks twice and
     # opens the first email must still get in. Wrong guesses count against
-    # every live code at once (see verify), so this opens no extra guesses.
+    # every live code at once (see verify), and only MAX_LIVE_OTP_CODES stay
+    # live (the oldest is retired below, once the new one has been sent).
     code = _generate_code()
     otp = OtpCode(
         email=email,
@@ -204,6 +205,31 @@ async def request_otp(
             OTP_SEND_FAILED,
             "No hem pogut enviar el correu. Torna-ho a provar d'aquí a uns minuts.",
         ) from None
+
+    # The new code is out: keep it and the most recent earlier ones, retire
+    # the rest. Done after sending so a failed email retires nothing.
+    earlier = (
+        (
+            await db.execute(
+                select(OtpCode.id)
+                .where(
+                    OtpCode.email == email,
+                    OtpCode.consumed == 0,
+                    OtpCode.expires_at >= datetime.now(timezone.utc),
+                    OtpCode.id != otp.id,
+                )
+                .order_by(OtpCode.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    surplus = earlier[MAX_LIVE_OTP_CODES - 1 :]
+    if surplus:
+        await db.execute(
+            update(OtpCode).where(OtpCode.id.in_(surplus)).values(consumed=1)
+        )
+        await db.commit()
     return MessageOut(message="Si el correu és vàlid, rebràs un codi.")
 
 

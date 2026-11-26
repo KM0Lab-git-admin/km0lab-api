@@ -7,6 +7,8 @@ import pytest
 from sqlalchemy import select, update
 
 from app.models import OtpCode, User
+from app.ratelimit import MAX_LIVE_OTP_CODES
+from app.security import verify_otp
 
 pytestmark = pytest.mark.asyncio
 
@@ -207,3 +209,83 @@ async def test_failed_first_email_leaves_nothing_half_done(
     ).scalars().all()
     assert live == []
     assert (await db_session.execute(select(User))).scalars().all() == []
+
+
+async def _live_codes(db_session) -> int:
+    rows = (
+        await db_session.execute(
+            select(OtpCode)
+            .where(OtpCode.email == EMAIL, OtpCode.consumed == 0)
+            .execution_options(populate_existing=True)
+        )
+    ).scalars().all()
+    return len(rows)
+
+
+async def _age_codes(db_session, ages: dict[str, int]) -> None:
+    """Fecha cada código pedido: {código: hace cuántos minutos}.
+
+    Varios códigos pedidos en el mismo segundo comparten ``created_at``; en
+    la vida real los separa la espera de reenvío de la app.
+    """
+    rows = (
+        await db_session.execute(select(OtpCode).where(OtpCode.email == EMAIL))
+    ).scalars().all()
+    for row in rows:
+        for code, minutes_ago in ages.items():
+            if verify_otp(code, row.code_hash):
+                row.created_at = datetime.utcnow() - timedelta(minutes=minutes_ago)
+    await db_session.commit()
+
+
+async def test_at_most_three_codes_stay_live(client, capture_otp, db_session):
+    """Cada intento se compara con todos los códigos vivos: que sean pocos."""
+    assert MAX_LIVE_OTP_CODES == 3
+    codes = []
+    for n in range(3):
+        await _request(client)
+        codes.append(capture_otp())
+    # Los tres primeros, pedidos hace 6, 4 y 2 minutos.
+    await _age_codes(db_session, dict(zip(codes, [6, 4, 2])))
+    assert await _live_codes(db_session) == 3
+
+    # El cuarto retira el más antiguo; el quinto, el siguiente.
+    await _request(client)
+    codes.append(capture_otp())
+    assert await _live_codes(db_session) == 3
+    await _age_codes(db_session, {codes[3]: 1})
+    await _request(client)
+    codes.append(capture_otp())
+    assert await _live_codes(db_session) == 3
+
+    # Los dos más antiguos ya no entran (salvo que coincidan por azar con uno vivo).
+    for old in codes[:2]:
+        if old in codes[2:]:
+            continue
+        r = await _verify(client, old)
+        assert r.status_code == 400
+    # Cualquiera de los tres últimos, sí.
+    r = await _verify(client, codes[2])
+    assert r.status_code == 200, r.text
+
+
+async def test_failed_email_does_not_retire_older_codes(
+    client, capture_otp, db_session, monkeypatch
+):
+    codes = []
+    for _ in range(3):
+        await _request(client)
+        codes.append(capture_otp())
+    await _age_codes(db_session, dict(zip(codes, [6, 4, 2])))
+
+    async def broken_send(to: str, code: str, lang: str | None = None) -> None:
+        raise RuntimeError("provider down")
+
+    monkeypatch.setattr("app.api.auth.send_otp_email", broken_send)
+    r = await _request(client)
+    assert r.status_code == 503
+
+    # Los tres que llegaron siguen vivos, también el más antiguo.
+    assert await _live_codes(db_session) == 3
+    r = await _verify(client, codes[0])
+    assert r.status_code == 200, r.text
