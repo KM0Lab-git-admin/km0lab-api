@@ -53,6 +53,12 @@ async def update_me(
         sync_user_fake_partition(user, user.postal_code)
         data.pop("postal_code")
 
+    # The birth date decides the day of a yearly bonus: once set it stays.
+    # A different value is ignored (the answer carries the stored one), so
+    # saving the rest of the profile keeps working.
+    if "birth_date" in data and user.birth_date is not None:
+        data.pop("birth_date")
+
     if "slug" in data:
         wanted = slugify(data.pop("slug") or "")
         taken = (

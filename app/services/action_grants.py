@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import extract, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -93,6 +93,34 @@ async def _count_grants(
     return int((await db.execute(q)).scalar_one())
 
 
+async def action_is_configured(
+    db: AsyncSession,
+    *,
+    action_type: str,
+    user: User,
+    town_id: str | None = None,
+) -> bool:
+    """The municipality has this action in its catalogue, in any state.
+
+    Tells "the admin switched it off (or set it to zero)" apart from "this
+    municipality never had it": only the second falls back to the defaults
+    in settings. Without a municipality there is nothing to ask.
+    """
+    scope_town_id = town_id if town_id is not None else user.town_id
+    if not scope_town_id:
+        return False
+    found = await db.scalar(
+        select(PointAction.id)
+        .where(
+            PointAction.type == action_type,
+            PointAction.town_id == scope_town_id,
+            PointAction.is_fake.is_(user.is_fake),
+        )
+        .limit(1)
+    )
+    return found is not None
+
+
 async def grant_signup_points(
     db: AsyncSession,
     *,
@@ -137,6 +165,11 @@ async def grant_signup_points(
             action.name or action.description or None,
         )
 
+    # The admin switched the signup action off, or it is outside its
+    # dates: that means no points, not the default.
+    if await action_is_configured(db, action_type=ACTION_TYPE_SIGNUP, user=user):
+        return ActionGrantResult(0, None, None)
+
     settings = get_settings()
     if settings.welcome_points <= 0:
         return ActionGrantResult(0, None, None)
@@ -164,6 +197,19 @@ def is_birthday_today(birth: date, today: date | None = None) -> bool:
     return today.month == birth.month and today.day == birth.day
 
 
+# Days an account must exist before it can collect the birthday bonus.
+BIRTHDAY_MIN_ACCOUNT_AGE_DAYS = 30
+
+
+def _account_age_days(user: User) -> int:
+    created = user.created_at
+    if created is None:
+        return 0
+    if created.tzinfo is not None:
+        created = created.astimezone(timezone.utc).replace(tzinfo=None)
+    return (datetime.utcnow() - created) // timedelta(days=1)
+
+
 async def grant_birthday_points(
     db: AsyncSession,
     *,
@@ -175,6 +221,10 @@ async def grant_birthday_points(
     if user.birth_date is None:
         return ActionGrantResult(0, None, None)
     if not is_birthday_today(user.birth_date, today):
+        return ActionGrantResult(0, None, None)
+    # A new account that happens to have its birthday today does not
+    # collect: otherwise signing up with a made-up date pays on day one.
+    if _account_age_days(user) < BIRTHDAY_MIN_ACCOUNT_AGE_DAYS:
         return ActionGrantResult(0, None, None)
 
     action = await find_active_action(

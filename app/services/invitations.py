@@ -19,7 +19,7 @@ from app.models import (
     Town,
     User,
 )
-from app.services.action_grants import find_active_action
+from app.services.action_grants import action_is_configured, find_active_action
 from app.services.points import apply_points
 from app.services.towns import get_postal_code
 
@@ -197,6 +197,11 @@ async def snapshot_reward_points(
     )
     if action is not None and action.points > 0:
         return action.points
+    # Switched off by the admin: no reward, not the default.
+    if await action_is_configured(
+        db, action_type=action_type, user=user, town_id=town_id
+    ):
+        return 0
     settings = get_settings()
     if kind == KIND_BUSINESS:
         return settings.invite_business_points
