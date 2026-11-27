@@ -47,6 +47,12 @@ from app.roles import (
 from app.schemas import AuthOut, MessageOut, RequestOtpIn, UserOut, VerifyOtpIn
 from app.security import create_access_token, hash_otp, verify_otp
 from app.services.action_grants import grant_signup_points
+from app.services.capacity import (
+    PILOT_FULL,
+    PILOT_FULL_MESSAGE,
+    accept_terms,
+    town_is_full,
+)
 from app.services.invitations import (
     EVENT_REG_STARTED,
     apply_invitee_postal_code,
@@ -153,6 +159,29 @@ async def _shop_waiting_for(
     )
 
 
+def _pilot_full() -> HTTPException:
+    return _otp_error(status.HTTP_409_CONFLICT, PILOT_FULL, PILOT_FULL_MESSAGE)
+
+
+async def _would_overflow(
+    db: AsyncSession, email: str, postal_code: str | None, *, lock: bool = False
+) -> bool:
+    """A new account for ``email`` in that postal code would exceed the
+    municipality's capacity. Never for an existing account, for a shop owner
+    the administrator is waiting for, or on the make-believe side."""
+    code = (postal_code or "").strip()
+    if not code or desired_user_is_fake(email, code):
+        return False
+    if await db.scalar(select(User.id).where(User.email == email)):
+        return False
+    postal = await get_postal_code(db, code)
+    if postal is None:
+        return False
+    if await _shop_waiting_for(db, email, is_fake=False) is not None:
+        return False
+    return await town_is_full(db, postal.town_id, lock=lock)
+
+
 def _generate_code() -> str:
     return "".join(secrets.choice("0123456789") for _ in range(settings.otp_length))
 
@@ -194,6 +223,11 @@ async def request_otp(
             )
         # No email sent — client proceeds with fixed code 123456.
         return MessageOut(message="Si el correu és vàlid, rebràs un codi.")
+
+    # A full pilot says so before sending anything: no code is worth
+    # waiting for. Whoever already has an account is never stopped here.
+    if await _would_overflow(db, email, payload.postal_code):
+        raise _pilot_full()
 
     # Earlier codes stay valid until they expire: whoever asks twice and
     # opens the first email must still get in. Wrong guesses count against
@@ -425,6 +459,11 @@ async def verify_otp_endpoint(
         shop.status = "active"
         await convert_business_activation(db, user=user, shop=shop)
     elif is_new:
+        # The authoritative check, with the municipality's row locked: two
+        # people cannot both take the last place. Nothing has been written
+        # yet, so the code stays usable if a place opens.
+        if await _would_overflow(db, email, payload.postal_code, lock=True):
+            raise _pilot_full()
         user = User(
             email=email,
             slug=await allocate_user_slug(db, email=email),
@@ -447,6 +486,8 @@ async def verify_otp_endpoint(
         # Settle the partition before granting points, so the welcome bonus
         # and its ledger row land on the same side as the user.
         sync_user_fake_partition(user)
+        # The app does not let anyone get here without ticking the box.
+        accept_terms(user, payload.terms_version)
 
     invite_code = (payload.invite_code or "").strip().lower() or (
         otp.invite_code if otp else None

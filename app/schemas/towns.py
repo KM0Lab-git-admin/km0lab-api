@@ -25,6 +25,9 @@ class TownOut(BaseModel):
     default_visit_points: int = 10
     default_lang: str = "ca"
     expiry_months: int | None
+    # Accounts the municipality admits (null = no limit) and how many it has.
+    max_residents: int | None = None
+    residents_count: int = 0
     postal_codes: list[TownPostalCodeOut] = []
     # The towns of the municipality (one, with its own name, when it is a
     # single town). The backoffice offers them when creating a shop.
@@ -49,6 +52,8 @@ class TownUpdate(BaseModel):
     default_visit_points: int | None = Field(default=None, ge=0)
     default_lang: str | None = Field(default=None, pattern="^(ca|es|en)$")
     expiry_months: int | None = Field(default=None, ge=1)
+    # Null clears the limit.
+    max_residents: int | None = Field(default=None, ge=1)
     slug: str | None = Field(
         default=None, max_length=80, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
     )

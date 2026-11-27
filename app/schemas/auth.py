@@ -9,6 +9,8 @@ class RequestOtpIn(BaseModel):
     lang: str | None = Field(default=None, pattern="^(ca|es|en)$")
     invite_code: str | None = Field(default=None, max_length=32)
     postal_code: str | None = Field(default=None, max_length=10)
+    # Version of the pilot terms the person ticked before asking for a code.
+    terms_version: str | None = Field(default=None, max_length=16)
 
 
 class VerifyOtpIn(BaseModel):
@@ -16,6 +18,7 @@ class VerifyOtpIn(BaseModel):
     code: str = Field(min_length=4, max_length=8)
     invite_code: str | None = Field(default=None, max_length=32)
     postal_code: str | None = Field(default=None, max_length=10)
+    terms_version: str | None = Field(default=None, max_length=16)
 
 
 class UserOut(BaseModel):
@@ -39,6 +42,9 @@ class UserOut(BaseModel):
     phone: str | None = None
     birth_date: date | None = None
     contact_shared: bool = False
+    # Proof of consent: null until the person accepts the terms in force.
+    terms_version: str | None = None
+    terms_accepted_at: datetime | None = None
     is_fake: bool = False
     created_at: datetime
 

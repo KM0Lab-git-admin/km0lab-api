@@ -13,6 +13,7 @@ What it leaves (``app/services/pilot_points.py``):
 - Signing up 50 points, scanning a QR 100, inviting a friend 50. Every
   other action (birthday, inviting a business, the rest) switched off.
 - A person is rewarded for 3 friends at most.
+- A real municipality admits 200 accounts; the demonstration has no limit.
 - Each shop pays a resident once: the wait to scan it again becomes 365 days.
 - 100 points = 1 EUR. A reward whose value is an amount in euros costs that
   amount x 100; the ones without an amount have a fixed price (T-shirt

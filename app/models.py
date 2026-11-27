@@ -55,6 +55,9 @@ class Town(Base):
     default_visit_points: Mapped[int] = mapped_column(Integer, default=10)
     default_lang: Mapped[str] = mapped_column(String(5), default="ca")  # ca|es|en
     expiry_months: Mapped[int | None] = mapped_column(Integer, default=None)
+    # Accounts the municipality admits (a pilot is for a limited group).
+    # None = no limit. See app/services/capacity.py.
+    max_residents: Mapped[int | None] = mapped_column(Integer, default=None)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
@@ -226,6 +229,10 @@ class User(Base):
     phone: Mapped[str | None] = mapped_column(String(40), default=None)
     birth_date: Mapped[date | None] = mapped_column(Date, default=None)
     contact_shared: Mapped[bool] = mapped_column(Boolean, default=False)
+    # When the person accepted the pilot terms, and which version (proof of
+    # consent). None on accounts older than the terms.
+    terms_accepted_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+    terms_version: Mapped[str | None] = mapped_column(String(16), default=None)
     is_fake: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()

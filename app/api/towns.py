@@ -11,6 +11,7 @@ from app.models import Locality, Town, TownMedia, TownPostalCode, User
 from app.schemas import TownMediaOut, TownOut, TownPublicOut, TownUpdate
 from app.schemas.towns import LocalityOut
 from app.services import public_towns
+from app.services.capacity import residents_count
 from app.services.localities import art_urls, get_locality_art, list_localities
 from app.services.public_towns import public_town_card, public_town_list
 from app.services.media_http import media_bytes_response, media_not_found_response
@@ -86,6 +87,7 @@ async def _admin_out(db: AsyncSession, town: Town) -> TownOut:
     """The municipality as its administrator sees it, towns included."""
     out = _to_out(town)
     out.localities, _ = await _locality_cards(db, town)
+    out.residents_count = await residents_count(db, town.id)
     return out
 
 

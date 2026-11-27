@@ -18,3 +18,5 @@ class UpdateUserIn(BaseModel):
     phone: str | None = Field(default=None, max_length=40)
     birth_date: date | None = None
     contact_shared: bool | None = None
+    # "I accept the terms in force": an account older than them accepts here.
+    terms_version: str | None = Field(default=None, max_length=16)

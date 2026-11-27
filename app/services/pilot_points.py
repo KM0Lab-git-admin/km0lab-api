@@ -4,6 +4,8 @@ Decided on 27-11-2026 for every municipality (and for the demonstration):
 
 - Signing up gives 50 points, scanning a shop's QR 100, a friend who
   completes their signup 50. Every other action is switched off.
+- A real municipality admits 200 accounts (``towns.max_residents``); the
+  demonstration, any number.
 - A person is rewarded for three friends at most (the "uses per user" of
   the invitation action; each municipality can change it in the backoffice).
 - Each shop gives its points once per resident: the wait before the same
@@ -44,6 +46,8 @@ POINTS_PER_EURO = 100
 SCAN_COOLDOWN_DAYS = 365
 # Friends a person can be rewarded for inviting.
 INVITE_FRIENDS_LIMIT = 3
+# Accounts a real municipality admits during the pilot.
+PILOT_MAX_RESIDENTS = 200
 
 # The only ways to earn points, and what each gives.
 ACTION_POINTS: dict[str, int] = {
@@ -167,6 +171,17 @@ async def set_pilot_points(
     if change("municipality", "points per 1 EUR", town.points_per_euro, POINTS_PER_EURO):
         if apply:
             town.points_per_euro = POINTS_PER_EURO
+
+    # The pilot is for a limited group; the demonstration has no limit.
+    if town.slug != DEMO_TOWN_SLUG:
+        if change(
+            "municipality",
+            "accounts admitted",
+            town.max_residents if town.max_residents is not None else "no limit",
+            PILOT_MAX_RESIDENTS,
+        ):
+            if apply:
+                town.max_residents = PILOT_MAX_RESIDENTS
 
     # What each shop's card shows ("+N pts") is its own copy of the number.
     shops = (

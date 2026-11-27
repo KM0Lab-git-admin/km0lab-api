@@ -10,6 +10,7 @@ from app.qa import is_qa_email, is_qa_postal_code
 from app.models import User
 from app.schemas import UpdateUserIn, UserOut
 from app.services.slugs import allocate_user_slug
+from app.services.capacity import accept_terms
 from app.services.residency import move_resident
 from app.services.towns import get_postal_code
 from app.utils.slug import slugify
@@ -50,6 +51,9 @@ async def update_me(
             await move_resident(db, user, postal, leave_demo=leave_demo)
         # ``null`` is ignored: an account that has a municipality keeps one.
         data.pop("postal_code")
+
+    if "terms_version" in data:
+        accept_terms(user, data.pop("terms_version"))
 
     # The birth date decides the day of a yearly bonus: once set it stays.
     # A different value is ignored (the answer carries the stored one), so

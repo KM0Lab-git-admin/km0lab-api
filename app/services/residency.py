@@ -30,6 +30,7 @@ from app.models import InvitationLink, TownPostalCode, User
 from app.qa import is_qa_email
 from app.roles import ROLE_ADMIN, ROLE_MERCHANT
 from app.services.action_grants import grant_signup_points
+from app.services.capacity import town_is_full
 from app.services.points import apply_points, lock_user_points
 
 # Ledger type of the movement that empties a balance on leaving the demo.
@@ -68,6 +69,13 @@ async def move_resident(
     """
     if postal is None or postal.postal_code == user.postal_code:
         return STAYS
+
+    # Arriving in another municipality takes a place there, like signing up.
+    arriving = postal.town_id != user.town_id
+    to_real = not desired_user_is_fake(user.email, postal.postal_code)
+    if arriving and to_real and not _bound_to_its_side(user):
+        if await town_is_full(db, postal.town_id, lock=True):
+            return STAYS
 
     if user.postal_code:
         from_demo = desired_user_is_fake(user.email, user.postal_code)
