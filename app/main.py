@@ -27,6 +27,7 @@ from app.api import (
     towns,
     users,
 )
+from app.api import demo as demo_sheet
 from app.config import get_settings
 from app.db import Base, engine
 from app.ratelimit import limiter
@@ -88,6 +89,7 @@ for module in (
     stats,
     invites,
     qa,
+    demo_sheet,
 ):
     app.include_router(module.router, prefix=API_V1)
 app.include_router(invites.admin_router, prefix=API_V1)
