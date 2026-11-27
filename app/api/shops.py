@@ -58,7 +58,12 @@ from app.services.shop_media import (
     media_public_path,
     upsert_shop_media,
 )
-from app.services.shop_qr import build_scan_url, ensure_shop_qr, qr_png_url
+from app.services.shop_qr import (
+    QR_KIND,
+    build_scan_url,
+    ensure_shop_qr,
+    qr_png_url,
+)
 from app.services.invitations import attach_business_conversion, convert_business_activation
 from app.services.localities import (
     LocalityRefused,
@@ -704,18 +709,38 @@ async def upload_shop_media(
 async def download_shop_media(
     shop_id: str,
     kind: str,
+    user: User | None = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Serve logo/hero/qr bytes (public so <img src> works without auth)."""
+    """Serve logo/hero bytes (public so <img src> works without auth).
+
+    The QR is not public: its picture *is* the scan code, and anyone holding
+    it could collect the visit without going. Only the shop itself and the
+    administrator of its municipality get it; to everyone else it does not
+    exist.
+    """
+    if kind == QR_KIND and not await _may_see_qr(db, user, shop_id):
+        return media_not_found_response()
     row = await get_shop_media(db, shop_id, kind)
     if not row:
         return media_not_found_response()
     return media_bytes_response(
         row.data,
         row.content_type,
-        cache="public, max-age=86400",
+        cache="private, max-age=3600" if kind == QR_KIND else "public, max-age=86400",
         byte_size=row.byte_size,
     )
+
+
+async def _may_see_qr(db: AsyncSession, user: User | None, shop_id: str) -> bool:
+    if user is None:
+        return False
+    if user.has_role(ROLE_MERCHANT) and user.shop_id == shop_id:
+        return True
+    if user.has_role(ROLE_ADMIN):
+        shop = await db.get(Shop, shop_id)
+        return shop is not None and shop.town_id == user.town_id
+    return False
 
 
 @router.get("/{shop_id}", response_model=ShopOut)
