@@ -29,6 +29,7 @@ async def update_me(
     db: AsyncSession = Depends(get_db),
 ):
     data = payload.model_dump(exclude_unset=True)
+    leave_demo = bool(data.pop("leave_demo", False))
     if "postal_code" in data:
         code = data["postal_code"]
         if is_qa_email(user.email) and not is_qa_postal_code(code):
@@ -44,9 +45,9 @@ async def update_me(
                     detail="Unknown postal code",
                 )
             # May stay where it is: an account does not cross from a real
-            # municipality to the demo, and leaving the demo empties its
-            # balance (app/services/residency.py).
-            await move_resident(db, user, postal)
+            # municipality to the demo, and leaves the demo only when the
+            # person confirms it (app/services/residency.py).
+            await move_resident(db, user, postal, leave_demo=leave_demo)
         # ``null`` is ignored: an account that has a municipality keeps one.
         data.pop("postal_code")
 

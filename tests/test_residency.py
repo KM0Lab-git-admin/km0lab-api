@@ -36,10 +36,13 @@ def _bearer(session: dict) -> dict[str, str]:
     return {"Authorization": f"Bearer {session['access_token']}"}
 
 
-async def _move(client, headers: dict, postal_code: str | None) -> dict:
-    r = await client.patch(
-        f"{API}/users/me", headers=headers, json={"postal_code": postal_code}
-    )
+async def _move(
+    client, headers: dict, postal_code: str | None, *, leave_demo: bool = False
+) -> dict:
+    body: dict = {"postal_code": postal_code}
+    if leave_demo:
+        body["leave_demo"] = True
+    r = await client.patch(f"{API}/users/me", headers=headers, json=body)
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -77,10 +80,32 @@ async def test_signing_up_in_the_demo_makes_a_demo_account(
     assert session["user"]["is_fake"] is True
 
 
-# ── From the demo to a real town: yes, with nothing in the pocket ─────
+# ── From the demo to a real town: only when the person says so ────────
 
 
-async def test_leaving_the_demo_empties_the_balance(client, db_session, capture_otp):
+async def test_a_demo_account_is_not_moved_by_logging_in_elsewhere(
+    client, db_session, capture_otp
+):
+    """The app sends the phone's postal code on every login. A demo account
+    used to show the product must survive a login from a phone set to a
+    real town."""
+    await malgrat(db_session)
+    await catalog(db_session)
+    await db_session.commit()
+    session = await _signup(client, capture_otp, "amiga@test.cat", DEMO_CP)
+    await _earn(db_session, "amiga@test.cat", 500)
+    points = session["user"]["points"] + 500
+
+    same = await _move(client, _bearer(session), "08380")
+
+    assert same["postal_code"] == DEMO_CP
+    assert same["is_fake"] is True
+    assert same["points"] == points
+
+
+async def test_leaving_the_demo_starts_over_with_the_welcome_of_the_town(
+    client, db_session, capture_otp
+):
     await malgrat(db_session)
     await catalog(db_session)
     await db_session.commit()
@@ -88,15 +113,34 @@ async def test_leaving_the_demo_empties_the_balance(client, db_session, capture_
     await _earn(db_session, "amiga@test.cat", 500)
     welcome = session["user"]["points"]
 
-    moved = await _move(client, _bearer(session), "08380")
+    moved = await _move(client, _bearer(session), "08380", leave_demo=True)
 
     assert moved["postal_code"] == "08380"
     assert moved["is_fake"] is False
-    assert moved["points"] == 0
-    # Every point has its movement, and the exit is written on the demo side.
+    # Nothing from the demo; the welcome of Malgrat, like any new resident.
+    assert moved["points"] == welcome
     ledger = await _ledger(db_session, "amiga@test.cat")
     assert (TX_DEMO_EXIT, -(welcome + 500), True) in ledger
-    assert sum(points for _type, points, _fake in ledger) == 0
+    assert ("welcome", welcome, False) in ledger
+    assert sum(points for _type, points, _fake in ledger) == welcome
+
+
+async def test_saying_leave_demo_does_nothing_to_a_real_resident(
+    client, db_session, capture_otp
+):
+    await malgrat(db_session)
+    await single_town(db_session, "Blanes", "17300")
+    await catalog(db_session)
+    await db_session.commit()
+    session = await _signup(client, capture_otp, "vei@test.cat", "08380")
+    points = session["user"]["points"]
+
+    # Between real towns it is a plain move: no reset, no second welcome.
+    moved = await _move(client, _bearer(session), "17300", leave_demo=True)
+    assert (moved["postal_code"], moved["points"]) == ("17300", points)
+    # And it does not open the way into the demo.
+    still = await _move(client, _bearer(session), DEMO_CP, leave_demo=True)
+    assert still["postal_code"] == "17300"
 
 
 async def test_a_real_resident_cannot_go_back_to_the_demo(
@@ -106,9 +150,9 @@ async def test_a_real_resident_cannot_go_back_to_the_demo(
     await catalog(db_session)
     await db_session.commit()
     session = await _signup(client, capture_otp, "amiga@test.cat", DEMO_CP)
-    await _move(client, _bearer(session), "08380")
+    await _move(client, _bearer(session), "08380", leave_demo=True)
 
-    back = await _move(client, _bearer(session), DEMO_CP)
+    back = await _move(client, _bearer(session), DEMO_CP, leave_demo=True)
 
     assert back["postal_code"] == "08380" and back["is_fake"] is False
 
@@ -242,7 +286,9 @@ async def test_whoever_runs_a_demo_shop_stays_in_the_demo(client, db_session):
         owner.id, roles=["resident", "merchant"], town_id=demo.id, shop_id=shop.id
     )
 
-    same = await _move(client, {"Authorization": f"Bearer {token}"}, "08380")
+    same = await _move(
+        client, {"Authorization": f"Bearer {token}"}, "08380", leave_demo=True
+    )
 
     assert same["postal_code"] == DEMO_CP and same["points"] == 300
 
@@ -260,7 +306,7 @@ async def test_the_invitation_link_follows_its_owner(client, db_session, capture
     )
     assert r.status_code == 200, r.text
 
-    await _move(client, headers, "08380")
+    await _move(client, headers, "08380", leave_demo=True)
 
     link = (await db_session.execute(select(InvitationLink))).scalars().one()
     await db_session.refresh(link)

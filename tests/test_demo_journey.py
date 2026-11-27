@@ -148,12 +148,20 @@ async def test_friends_do_the_whole_demo_and_nothing_leaks(
     assert real_accounts == 0
 
     # ── And the points do not travel ──────────────────────────────────
-    # Pol's town joins the pilot: same email, a real resident, from zero.
+    # Logging in from a phone set to Malgrat does not move him by itself.
     r = await client.patch(
         f"{API}/users/me", headers=pol["headers"], json={"postal_code": "08380"}
     )
+    assert r.json()["postal_code"] == DEMO_CP and r.json()["points"] == 150
+    # His town joins the pilot and he says yes: same email, a real resident
+    # with the welcome of Malgrat and nothing of what he earned playing.
+    r = await client.patch(
+        f"{API}/users/me",
+        headers=pol["headers"],
+        json={"postal_code": "08380", "leave_demo": True},
+    )
     assert r.status_code == 200, r.text
-    assert (r.json()["is_fake"], r.json()["points"]) == (False, 0)
+    assert (r.json()["is_fake"], r.json()["points"]) == (False, 50)
     # A demo QR is worth nothing to him now.
     r = await client.post(
         f"{API}/scans", headers=pol["headers"], json={"qr_code": codes[1]}

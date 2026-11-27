@@ -11,6 +11,10 @@ class UpdateUserIn(BaseModel):
     )
     lang: str | None = Field(default=None, pattern="^(ca|es|en)$")
     postal_code: str | None = Field(default=None, max_length=10)
+    # With ``postal_code``: "yes, turn my demo account into my resident
+    # account in that town" (its balance starts over). Without it a demo
+    # account is not moved to a real municipality.
+    leave_demo: bool = False
     phone: str | None = Field(default=None, max_length=40)
     birth_date: date | None = None
     contact_shared: bool | None = None
