@@ -34,7 +34,7 @@ from app.demo import (
 )
 from app.catalog.email_otp import normalize_otp_lang
 from app.email import send_otp_email
-from app.models import OtpCode, User
+from app.models import OtpCode, Shop, User
 from app.qa import QA_POSTAL_CODE, is_qa_email, is_qa_postal_code
 from app.ratelimit import MAX_LIVE_OTP_CODES, MAX_OTP_ATTEMPTS, limiter
 from app.roles import (
@@ -120,6 +120,36 @@ async def _no_live_code_error(db: AsyncSession, email: str) -> HTTPException:
         status.HTTP_400_BAD_REQUEST,
         OTP_EXPIRED,
         "Aquest codi ha caducat. Demana'n un de nou.",
+    )
+
+
+async def _shop_waiting_for(
+    db: AsyncSession, email: str, *, is_fake: bool
+) -> Shop | None:
+    """The shop this email was given as contact for and nobody runs yet.
+
+    Registering a shop with someone's email is the invitation: the first
+    time that person logs in, the shop is theirs. It does not matter whether
+    the administrator switched the shop on in the meantime — only a shop
+    that is switched off, or that already has its owner, is left alone.
+    """
+    claimed = select(User.id).where(User.shop_id == Shop.id).exists()
+    return (
+        (
+            await db.execute(
+                select(Shop)
+                .where(
+                    Shop.contact_email == email,
+                    Shop.status.in_(("pending", "active")),
+                    Shop.is_fake.is_(is_fake),
+                    ~claimed,
+                )
+                # The one still waiting first, then the oldest.
+                .order_by(Shop.status.desc(), Shop.created_at, Shop.id)
+            )
+        )
+        .scalars()
+        .first()
     )
 
 
@@ -357,25 +387,14 @@ async def verify_otp_endpoint(
     is_new = user is None
     grant_welcome = False
 
-    from app.models import Shop
-
-    shop = (
-        await db.execute(
-            select(Shop).where(
-                Shop.contact_email == email,
-                Shop.status == "pending",
-                # A QA account only ever activates a QA (fake) shop.
-                Shop.is_fake.is_(qa_account),
-            )
-        )
-    ).scalars().first()
+    # An administrator stays an administrator, and whoever already runs a
+    # shop keeps it: neither is handed another one for logging in.
+    shop = None
+    if user is None or not (user.has_role(ROLE_ADMIN) or user.shop_id):
+        # A QA account only ever takes a QA (fake) shop.
+        shop = await _shop_waiting_for(db, email, is_fake=qa_account)
 
     if shop:
-        if user and user.has_role(ROLE_ADMIN):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Admin cannot also be merchant",
-            )
         try:
             merchant_flags = flags_from_roles([ROLE_RESIDENT, ROLE_MERCHANT])
         except IncompatibleRolesError as exc:
