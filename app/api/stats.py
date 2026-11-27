@@ -1,0 +1,147 @@
+"""Derived KPIs for admin and merchant dashboards."""
+
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db import get_db
+from app.deps import require_admin, resolve_acting_shop
+from app.models import PointAction, Promotion, QrScan, Redemption, Shop, TownPostalCode, User
+from app.schemas import AdminStatsOut, MerchantStatsOut
+
+router = APIRouter(prefix="/stats", tags=["stats"])
+
+
+@router.get("/admin", response_model=AdminStatsOut)
+async def admin_stats(
+    user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    if not user.town_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Admin has no town")
+    town_id = user.town_id
+
+    active_users = (
+        await db.execute(
+            select(func.count())
+            .select_from(User)
+            .join(TownPostalCode, User.postal_code == TownPostalCode.postal_code)
+            .where(
+                User.is_resident.is_(True),
+                TownPostalCode.town_id == town_id,
+                User.is_fake.is_(user.is_fake),
+            )
+        )
+    ).scalar_one()
+
+    points_in_circulation = (
+        await db.execute(
+            select(func.coalesce(func.sum(User.points), 0))
+            .select_from(User)
+            .join(TownPostalCode, User.postal_code == TownPostalCode.postal_code)
+            .where(
+                User.is_resident.is_(True),
+                TownPostalCode.town_id == town_id,
+                User.is_fake.is_(user.is_fake),
+            )
+        )
+    ).scalar_one()
+
+    month_start = datetime.now(timezone.utc).replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0
+    )
+    redemptions_this_month = (
+        await db.execute(
+            select(func.count())
+            .select_from(Redemption)
+            .where(
+                Redemption.town_id == town_id,
+                Redemption.requested_at >= month_start,
+                Redemption.is_fake.is_(user.is_fake),
+            )
+        )
+    ).scalar_one()
+
+    active_actions = (
+        await db.execute(
+            select(func.count())
+            .select_from(PointAction)
+            .where(
+                PointAction.town_id == town_id,
+                PointAction.active.is_(True),
+                PointAction.is_fake.is_(user.is_fake),
+            )
+        )
+    ).scalar_one()
+
+    total_actions = (
+        await db.execute(
+            select(func.count())
+            .select_from(PointAction)
+            .where(
+                PointAction.town_id == town_id,
+                PointAction.is_fake.is_(user.is_fake),
+            )
+        )
+    ).scalar_one()
+
+    return AdminStatsOut(
+        active_users=active_users,
+        points_in_circulation=int(points_in_circulation),
+        redemptions_this_month=redemptions_this_month,
+        active_actions=active_actions,
+        total_actions=total_actions,
+    )
+
+
+@router.get("/merchant", response_model=MerchantStatsOut)
+async def merchant_stats(
+    shop: Shop = Depends(resolve_acting_shop),
+    db: AsyncSession = Depends(get_db),
+):
+    shop_id = shop.id
+
+    total_scans = (
+        await db.execute(
+            select(func.count())
+            .select_from(QrScan)
+            .where(QrScan.shop_id == shop_id, QrScan.is_fake.is_(shop.is_fake))
+        )
+    ).scalar_one()
+
+    unique_visitors = (
+        await db.execute(
+            select(func.count(func.distinct(QrScan.user_id))).where(
+                QrScan.shop_id == shop_id, QrScan.is_fake.is_(shop.is_fake)
+            )
+        )
+    ).scalar_one()
+
+    points_awarded = (
+        await db.execute(
+            select(func.coalesce(func.sum(QrScan.points), 0)).where(
+                QrScan.shop_id == shop_id, QrScan.is_fake.is_(shop.is_fake)
+            )
+        )
+    ).scalar_one()
+
+    active_promotions = (
+        await db.execute(
+            select(func.count())
+            .select_from(Promotion)
+            .where(
+                Promotion.shop_id == shop_id,
+                Promotion.active.is_(True),
+                Promotion.is_fake.is_(shop.is_fake),
+            )
+        )
+    ).scalar_one()
+
+    return MerchantStatsOut(
+        total_scans=total_scans,
+        unique_visitors=unique_visitors,
+        points_awarded=int(points_awarded),
+        active_promotions=active_promotions,
+    )

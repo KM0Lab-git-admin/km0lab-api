@@ -1,0 +1,151 @@
+"""Demo accounts: fixed OTP bypass + fake content scope (dev/staging only)."""
+
+from __future__ import annotations
+
+from app.config import get_settings
+from app.qa import is_qa_email, is_qa_postal_code
+from app.roles import ROLE_ADMIN, ROLE_MERCHANT, ROLE_RESIDENT
+
+DEMO_CODE = "123456"
+
+DEMO_RESIDENT_EMAIL = "resident@km0lab.com"
+DEMO_MERCHANT_EMAIL = "merchant@km0lab.com"
+DEMO_ADMIN_EMAIL = "admin@km0lab.com"
+
+# Fictional town for product demos / QA (separate from Malgrat real).
+DEMO_POSTAL_CODE = "00000"
+DEMO_TOWN_NAME = "Demo KM0"
+DEMO_TOWN_SLUG = "demo-km0"
+# Municipal content (agenda, news) falls back to this population name.
+MALGRAT_CP = "08380"
+MALGRAT_CONTENT_TOWN = "Malgrat de Mar"
+
+DEMO_EMAILS: frozenset[str] = frozenset(
+    {
+        DEMO_RESIDENT_EMAIL,
+        DEMO_MERCHANT_EMAIL,
+        DEMO_ADMIN_EMAIL,
+    }
+)
+
+# Malgrat real (08380, is_fake=false). OTP 123456 in development/staging only.
+# Not DEMO_EMAILS: those stay on the Demo KM0 fake partition.
+ADMIN_MALGRAT_EMAIL = "admin-malgrat@km0lab.com"
+MERCHANT1_MALGRAT_EMAIL = "merchant1-malgrat@km0lab.com"
+MERCHANT2_MALGRAT_EMAIL = "merchant2-malgrat@km0lab.com"
+
+MALGRAT_QA_EMAILS: frozenset[str] = frozenset(
+    {
+        ADMIN_MALGRAT_EMAIL,
+        MERCHANT1_MALGRAT_EMAIL,
+        MERCHANT2_MALGRAT_EMAIL,
+    }
+)
+
+# Administrators of the real municipalities (is_fake=false) while the pilot
+# runs in demo mode: they enter with 123456 in development/staging only.
+# One address per municipality, named after it: <municipality>@km0lab.com.
+# The accounts are not created by logging in: ``scripts/add_admin.py``
+# registers them. Exactly these addresses, nothing wider.
+#
+# The repositories are public: anyone who reads this can enter UAT as these
+# administrators. Remove an address before its municipality has real
+# residents or shops (then the account logs in with a code sent to its
+# mailbox).
+ADMIN_BAIX_MONTSENY_EMAIL = "baixmontseny@km0lab.com"
+ADMIN_MALGRAT_PILOT_EMAIL = "malgrat@km0lab.com"
+
+PILOT_ADMIN_EMAILS: frozenset[str] = frozenset(
+    {ADMIN_BAIX_MONTSENY_EMAIL, ADMIN_MALGRAT_PILOT_EMAIL}
+)
+
+FIXED_OTP_EMAILS: frozenset[str] = (
+    DEMO_EMAILS | MALGRAT_QA_EMAILS | PILOT_ADMIN_EMAILS
+)
+
+DEMO_ROLES: dict[str, list[str]] = {
+    DEMO_RESIDENT_EMAIL: [ROLE_RESIDENT],
+    DEMO_MERCHANT_EMAIL: [ROLE_RESIDENT, ROLE_MERCHANT],
+    DEMO_ADMIN_EMAIL: [ROLE_RESIDENT, ROLE_ADMIN],
+}
+
+
+def demo_enabled() -> bool:
+    """Available in development and staging so demos work on Railway staging."""
+    env = get_settings().environment.lower().strip()
+    return env in {"development", "staging"}
+
+
+def is_demo_email(email: str) -> bool:
+    return email.lower().strip() in DEMO_EMAILS
+
+
+def is_malgrat_qa_email(email: str) -> bool:
+    return email.lower().strip() in MALGRAT_QA_EMAILS
+
+
+def is_pilot_admin_email(email: str) -> bool:
+    return email.lower().strip() in PILOT_ADMIN_EMAILS
+
+
+def is_fixed_otp_email(email: str) -> bool:
+    """123456 bypass (dev/staging). Demo partition, Malgrat QA, pilot admin,
+    QA territory."""
+    return email.lower().strip() in FIXED_OTP_EMAILS or is_qa_email(email)
+
+
+def is_demo_postal_code(postal_code: str | None) -> bool:
+    return (postal_code or "").strip() == DEMO_POSTAL_CODE
+
+
+def is_fake_postal_code(postal_code: str | None) -> bool:
+    """Postal codes whose town lives on the ``is_fake`` partition."""
+    return is_demo_postal_code(postal_code) or is_qa_postal_code(postal_code)
+
+
+def desired_user_is_fake(email: str, postal_code: str | None) -> bool:
+    """Partition a resident should live in.
+
+    - Seeded demo emails always stay on the fake partition.
+    - QA accounts (``qa+…@km0lab.com``) always stay on the fake partition.
+    - Everyone else: fake iff their postal code is Demo KM0 (00000) or a
+      QA territory one (9999x).
+    """
+    if is_demo_email(email) or is_qa_email(email):
+        return True
+    return is_fake_postal_code(postal_code)
+
+
+def sync_user_fake_partition(user, postal_code: str | None = None) -> bool:
+    """Align ``user.is_fake`` with Demo KM0 membership.
+
+    ``postal_code`` defaults to ``user.postal_code``. Returns True if the
+    flag changed (caller should commit).
+    """
+    cp = user.postal_code if postal_code is None else postal_code
+    desired = desired_user_is_fake(user.email, cp)
+    if user.is_fake == desired:
+        return False
+    user.is_fake = desired
+    return True
+
+
+def resolve_public_demo(postal_code: str, requested: bool) -> bool:
+    """Partition for public catalogs.
+
+    - Demo CP (00000) always returns the fake/showcase partition.
+    - QA territory CPs (9999x) always return the fake partition.
+    - Malgrat real (08380) never returns fake via the public API.
+    - Other CPs keep the caller's ``demo`` flag (tests / future towns).
+    """
+    cp = postal_code.strip()
+    if cp == DEMO_POSTAL_CODE or is_qa_postal_code(cp):
+        return True
+    if cp == MALGRAT_CP:
+        return False
+    return requested
+
+
+def fake_match(user_is_fake: bool):
+    """SQLAlchemy-friendly: rows visible to this user (real vs fake partition)."""
+    return user_is_fake

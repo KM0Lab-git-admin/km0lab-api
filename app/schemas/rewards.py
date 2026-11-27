@@ -1,0 +1,83 @@
+from datetime import datetime
+
+from pydantic import BaseModel, Field
+
+from app.catalog.rewards import REWARD_TYPE_PATTERN
+
+
+class RewardOut(BaseModel):
+    id: str
+    town_id: str
+    name: str
+    description: str
+    name_i18n: dict | None = None
+    description_i18n: dict | None = None
+    conditions_i18n: dict | None = None
+    i18n_source_lang: str = "ca"
+    image_url: str | None
+    has_image: bool = False
+    type: str
+    points_required: int
+    value: str | None
+    stock: int | None
+    valid_from: datetime | None
+    valid_until: datetime | None
+    conditions: str | None
+    status: str
+    shop_ids: list[str] = Field(default_factory=list)  # empty = all shops
+    is_fake: bool = False
+    # Copy of a shared catalog reward: the municipality's admin may only
+    # switch it on and off (PATCH with nothing but ``status``).
+    content_locked: bool = False
+    catalog_id: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class RewardCreate(BaseModel):
+    name: str | None = Field(default=None, max_length=200)
+    description: str | None = ""
+    name_i18n: dict | None = None
+    description_i18n: dict | None = None
+    conditions_i18n: dict | None = None
+    i18n_source_lang: str | None = Field(default=None, pattern="^(ca|es|en)$")
+    image_url: str | None = None  # ignored; use PUT /rewards/{id}/media
+    type: str = Field(pattern=REWARD_TYPE_PATTERN)
+    points_required: int = Field(ge=0)
+    value: str | None = None
+    stock: int | None = Field(default=None, ge=0)
+    valid_from: datetime | None = None
+    valid_until: datetime | None = None
+    conditions: str | None = None
+    status: str = Field(default="active", pattern="^(active|inactive|sold_out)$")
+    shop_ids: list[str] = Field(default_factory=list)
+
+
+class RewardUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    name_i18n: dict | None = None
+    description_i18n: dict | None = None
+    conditions_i18n: dict | None = None
+    i18n_source_lang: str | None = Field(default=None, pattern="^(ca|es|en)$")
+    image_url: str | None = None  # ignored; use PUT/DELETE /rewards/{id}/media
+    type: str | None = Field(default=None, pattern=REWARD_TYPE_PATTERN)
+    points_required: int | None = Field(default=None, ge=0)
+    value: str | None = None
+    stock: int | None = None
+    valid_from: datetime | None = None
+    valid_until: datetime | None = None
+    conditions: str | None = None
+    status: str | None = Field(
+        default=None, pattern="^(active|inactive|sold_out)$"
+    )
+    shop_ids: list[str] | None = None
+
+
+class RewardMediaOut(BaseModel):
+    reward_id: str
+    content_type: str
+    byte_size: int
+    url: str

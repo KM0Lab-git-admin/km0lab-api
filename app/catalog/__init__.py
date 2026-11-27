@@ -1,0 +1,1 @@
+"""Package: static domain catalogs."""

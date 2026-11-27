@@ -1,0 +1,2374 @@
+{
+  "info": {
+    "name": "KM0 LAB API",
+    "description": "API KM0 LAB (`/api/v1`).\n\n**Auth:** `POST /auth/request-otp` → `POST /auth/verify-otp` (guarda `access_token` en el entorno).\n\n**Demo UAT:** `resident@` / `merchant@` / `admin@km0lab.com` con código `123456`.\n\n**Admin en panel comercio:** header `X-Acting-Shop-Id` = `{{shop_id}}`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://api.uat.km0lab.com"
+    }
+  ],
+  "item": [
+    {
+      "name": "00 · Health",
+      "description": "",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "health"
+              ]
+            },
+            "description": "Liveness check",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "01 · Auth",
+      "description": "Login OTP. Demo: code 123456.",
+      "item": [
+        {
+          "name": "Request OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/request-otp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "request-otp"
+              ]
+            },
+            "description": "Envía OTP. Demo emails no envían correo.",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"lang\": \"{{lang}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Verify OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/verify-otp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "verify-otp"
+              ]
+            },
+            "description": "Devuelve JWT. Test script guarda token e IDs.",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"code\": \"{{otp_code}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const j = pm.response.json();",
+                  "  if (j.access_token) pm.environment.set('access_token', j.access_token);",
+                  "  if (j.user) {",
+                  "    if (j.user.id) pm.environment.set('user_id', j.user.id);",
+                  "    if (j.user.town_id) pm.environment.set('town_id', j.user.town_id);",
+                  "    if (j.user.shop_id) pm.environment.set('shop_id', j.user.shop_id);",
+                  "    if (j.user.email) pm.environment.set('email', j.user.email);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02 · Users",
+      "description": "",
+      "item": [
+        {
+          "name": "Get me",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me"
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Patch me",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"first_name\": \"Anna\",\n  \"last_name\": \"García\",\n  \"lang\": \"ca\",\n  \"postal_code\": \"{{postal_code}}\",\n  \"phone\": \"+34600111222\",\n  \"birth_date\": \"1990-05-15\",\n  \"contact_shared\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 · Towns",
+      "description": "",
+      "item": [
+        {
+          "name": "Public by postal code",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/towns/public?postal_code={{postal_code}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "towns",
+                "public"
+              ],
+              "query": [
+                {
+                  "key": "postal_code",
+                  "value": "{{postal_code}}",
+                  "disabled": false
+                }
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "My town (admin)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/towns/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "towns",
+                "me"
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Get town",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/towns/{{town_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "towns",
+                "{{town_id}}"
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Patch town",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/towns/{{town_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "towns",
+                "{{town_id}}"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"entity_name\": \"Ajuntament Demo\",\n  \"points_per_euro\": 200,\n  \"default_visit_points\": 10,\n  \"default_lang\": \"ca\",\n  \"expiry_months\": 12\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Upload town media",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/towns/{{town_id}}/media/{{media_kind}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "towns",
+                "{{town_id}}",
+                "media",
+                "{{media_kind}}"
+              ]
+            },
+            "description": "kind: logo (etc.)",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "",
+                  "description": "Image file (png/jpg/webp)"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete town media",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/towns/{{town_id}}/media/{{media_kind}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "towns",
+                "{{town_id}}",
+                "media",
+                "{{media_kind}}"
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Get town media (public)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/towns/{{town_id}}/media/{{media_kind}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "towns",
+                "{{town_id}}",
+                "media",
+                "{{media_kind}}"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 · Shops",
+      "description": "",
+      "item": [
+        {
+          "name": "Public list",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/shops/public?postal_code={{postal_code}}&lang={{lang}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "shops",
+                "public"
+              ],
+              "query": [
+                {
+                  "key": "postal_code",
+                  "value": "{{postal_code}}",
+                  "disabled": false
+                },
+                {
+                  "key": "lang",
+                  "value": "{{lang}}",
+                  "disabled": false
+                },
+                {
+                  "key": "demo",
+                  "value": "true",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "For me (resident)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/shops/for-me?lang={{lang}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "shops",
+                "for-me"
+              ],
+              "query": [
+                {
+                  "key": "postal_code",
+                  "value": "{{postal_code}}",
+                  "disabled": true
+                },
+                {
+                  "key": "lang",
+                  "value": "{{lang}}",
+                  "disabled": false
+                }
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "List (admin)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/shops?lang={{lang}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "shops"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "active",
+                  "disabled": true
+                },
+                {
+                  "key": "q",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "lang",
+                  "value": "{{lang}}",
+                  "disabled": false
+                }
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Create shop (admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/shops",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "shops"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Fleca Demo\",\n  \"emoji\": \"🥖\",\n  \"categories\": [\n    \"bakery\"\n  ],\n  \"contact_email\": \"merchant@km0lab.com\",\n  \"visit_points\": 10,\n  \"address\": \"Carrer Major 1\",\n  \"postal_code\": \"{{postal_code}}\",\n  \"phone\": \"+34930111222\",\n  \"description\": \"Pa del dia\",\n  \"i18n_source_lang\": \"ca\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Get me (merchant/admin)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Acting-Shop-Id",
+                "value": "{{shop_id}}",
+                "description": "Admin acting as shop (BO comercio)"
+              },
+              {
+                "key": "X-Active-Role",
+                "value": "{{active_role}}",
+                "disabled": true,
+                "description": "Optional: resident|merchant|admin"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/shops/me?lang={{lang}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "shops",
+                "me"
+              ],
+              "query": [
+                {
+                  "key": "lang",
+                  "value": "{{lang}}",
+                  "disabled": false
+                }
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Patch me",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Acting-Shop-Id",
+                "value": "{{shop_id}}",
+                "description": "Admin acting as shop (BO comercio)"
+              },
+              {
+                "key": "X-Active-Role",
+                "value": "{{active_role}}",
+                "disabled": true,
+                "description": "Optional: resident|merchant|admin"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/shops/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "shops",
+                "me"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Fleca Demo\",\n  \"description\": \"Pa artesà\",\n  \"phone\": \"+34930111222\",\n  \"i18n_source_lang\": \"ca\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Upload my media",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Acting-Shop-Id",
+                "value": "{{shop_id}}",
+                "description": "Admin acting as shop (BO comercio)"
+              },
+              {
+                "key": "X-Active-Role",
+                "value": "{{active_role}}",
+                "disabled": true,
+                "description": "Optional: resident|merchant|admin"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/shops/me/media/{{media_kind}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "shops",
+                "me",
+                "media",
+                "{{media_kind}}"
+              ]
+            },
+            "description": "kind: logo|hero|qr",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "",
+                  "description": "Image file (png/jpg/webp)"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete my media",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Acting-Shop-Id",
+                "value": "{{shop_id}}",
+                "description": "Admin acting as shop (BO comercio)"
+              },
+              {
+                "key": "X-Active-Role",
+                "value": "{{active_role}}",
+                "disabled": true,
+                "description": "Optional: resident|merchant|admin"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/shops/me/media/{{media_kind}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "shops",
+                "me",
+                "media",
+                "{{media_kind}}"
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Get my QR",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Acting-Shop-Id",
+                "value": "{{shop_id}}",
+                "description": "Admin acting as shop (BO comercio)"
+              },
+              {
+                "key": "X-Active-Role",
+                "value": "{{active_role}}",
+                "disabled": true,
+                "description": "Optional: resident|merchant|admin"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/shops/me/qr",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "shops",
+                "me",
+                "qr"
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Ensure my QR",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Acting-Shop-Id",
+                "value": "{{shop_id}}",
+                "description": "Admin acting as shop (BO comercio)"
+              },
+              {
+                "key": "X-Active-Role",
+                "value": "{{active_role}}",
+                "disabled": true,
+                "description": "Optional: resident|merchant|admin"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/shops/me/qr",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "shops",
+                "me",
+                "qr"
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Upload shop media (admin)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/shops/{{shop_id}}/media/{{media_kind}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "shops",
+                "{{shop_id}}",
+                "media",
+                "{{media_kind}}"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "",
+                  "description": "Image file (png/jpg/webp)"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get shop media (public)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/shops/{{shop_id}}/media/{{media_kind}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "shops",
+                "{{shop_id}}",
+                "media",
+                "{{media_kind}}"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Get shop",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/shops/{{shop_id}}?lang={{lang}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "shops",
+                "{{shop_id}}"
+              ],
+              "query": [
+                {
+                  "key": "lang",
+                  "value": "{{lang}}",
+                  "disabled": false
+                }
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Patch shop (admin)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/shops/{{shop_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "shops",
+                "{{shop_id}}"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"active\",\n  \"visit_points\": 15\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 · Shop categories",
+      "description": "",
+      "item": [
+        {
+          "name": "List",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/shop-categories?lang={{lang}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "shop-categories"
+              ],
+              "query": [
+                {
+                  "key": "include_inactive",
+                  "value": "false",
+                  "disabled": true
+                },
+                {
+                  "key": "lang",
+                  "value": "{{lang}}",
+                  "disabled": false
+                }
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Patch category (admin)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/shop-categories/{{category_slug}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "shop-categories",
+                "{{category_slug}}"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"label_i18n\": {\n    \"ca\": \"Fleca\",\n    \"es\": \"Panadería\",\n    \"en\": \"Bakery\"\n  },\n  \"i18n_source_lang\": \"ca\",\n  \"sort_order\": 10,\n  \"active\": true,\n  \"emoji\": \"🥖\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 · Promotions",
+      "description": "",
+      "item": [
+        {
+          "name": "Public list",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/promotions/public?postal_code={{postal_code}}&lang={{lang}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "promotions",
+                "public"
+              ],
+              "query": [
+                {
+                  "key": "postal_code",
+                  "value": "{{postal_code}}",
+                  "disabled": false
+                },
+                {
+                  "key": "lang",
+                  "value": "{{lang}}",
+                  "disabled": false
+                },
+                {
+                  "key": "demo",
+                  "value": "true",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "List (merchant)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Acting-Shop-Id",
+                "value": "{{shop_id}}",
+                "description": "Admin acting as shop (BO comercio)"
+              },
+              {
+                "key": "X-Active-Role",
+                "value": "{{active_role}}",
+                "disabled": true,
+                "description": "Optional: resident|merchant|admin"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/promotions?lang={{lang}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "promotions"
+              ],
+              "query": [
+                {
+                  "key": "lang",
+                  "value": "{{lang}}",
+                  "disabled": false
+                }
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Create",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Acting-Shop-Id",
+                "value": "{{shop_id}}",
+                "description": "Admin acting as shop (BO comercio)"
+              },
+              {
+                "key": "X-Active-Role",
+                "value": "{{active_role}}",
+                "disabled": true,
+                "description": "Optional: resident|merchant|admin"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/promotions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "promotions"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"discount\",\n  \"title\": \"10% en pastes\",\n  \"label\": \"10% pastes\",\n  \"detail\": \"Vàlid de dilluns a divendres\",\n  \"value\": \"10%\",\n  \"min_purchase\": \"5\",\n  \"active\": true,\n  \"i18n_source_lang\": \"ca\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Patch",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Acting-Shop-Id",
+                "value": "{{shop_id}}",
+                "description": "Admin acting as shop (BO comercio)"
+              },
+              {
+                "key": "X-Active-Role",
+                "value": "{{active_role}}",
+                "disabled": true,
+                "description": "Optional: resident|merchant|admin"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/promotions/{{promo_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "promotions",
+                "{{promo_id}}"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"active\": false,\n  \"value\": \"15%\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Delete",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Acting-Shop-Id",
+                "value": "{{shop_id}}",
+                "description": "Admin acting as shop (BO comercio)"
+              },
+              {
+                "key": "X-Active-Role",
+                "value": "{{active_role}}",
+                "disabled": true,
+                "description": "Optional: resident|merchant|admin"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/promotions/{{promo_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "promotions",
+                "{{promo_id}}"
+              ]
+            },
+            "description": ""
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 · Actions",
+      "description": "",
+      "item": [
+        {
+          "name": "Public list",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/actions/public?postal_code={{postal_code}}&lang={{lang}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "actions",
+                "public"
+              ],
+              "query": [
+                {
+                  "key": "postal_code",
+                  "value": "{{postal_code}}",
+                  "disabled": false
+                },
+                {
+                  "key": "visible_home",
+                  "value": "true",
+                  "disabled": true
+                },
+                {
+                  "key": "lang",
+                  "value": "{{lang}}",
+                  "disabled": false
+                },
+                {
+                  "key": "demo",
+                  "value": "true",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "List (admin)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/actions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "actions"
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Create (admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/actions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "actions"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"custom\",\n  \"name\": \"Visita web\",\n  \"description\": \"Entra a la web municipal\",\n  \"points\": 50,\n  \"per_user_limit\": 1,\n  \"visible_home\": true,\n  \"active\": true,\n  \"url\": \"https://example.com\",\n  \"i18n_source_lang\": \"ca\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Patch (admin)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/actions/{{action_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "actions",
+                "{{action_id}}"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"points\": 75,\n  \"visible_home\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Activate",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/actions/{{action_id}}/activate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "actions",
+                "{{action_id}}",
+                "activate"
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Deactivate",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/actions/{{action_id}}/deactivate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "actions",
+                "{{action_id}}",
+                "deactivate"
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Delete",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/actions/{{action_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "actions",
+                "{{action_id}}"
+              ]
+            },
+            "description": ""
+          }
+        }
+      ]
+    },
+    {
+      "name": "08 · Points",
+      "description": "",
+      "item": [
+        {
+          "name": "My history",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/points/me/history?filter=all&limit=100",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "points",
+                "me",
+                "history"
+              ],
+              "query": [
+                {
+                  "key": "filter",
+                  "value": "all",
+                  "disabled": false
+                },
+                {
+                  "key": "limit",
+                  "value": "100",
+                  "disabled": false
+                }
+              ]
+            },
+            "description": "filter: all|earned|spent"
+          }
+        },
+        {
+          "name": "Claim birthday",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/points/claim-birthday",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "points",
+                "claim-birthday"
+              ]
+            },
+            "description": ""
+          }
+        }
+      ]
+    },
+    {
+      "name": "09 · Rewards",
+      "description": "",
+      "item": [
+        {
+          "name": "Public list",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/rewards/public?postal_code={{postal_code}}&lang={{lang}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "rewards",
+                "public"
+              ],
+              "query": [
+                {
+                  "key": "postal_code",
+                  "value": "{{postal_code}}",
+                  "disabled": false
+                },
+                {
+                  "key": "lang",
+                  "value": "{{lang}}",
+                  "disabled": false
+                },
+                {
+                  "key": "demo",
+                  "value": "true",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "List",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/rewards?lang={{lang}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "rewards"
+              ],
+              "query": [
+                {
+                  "key": "lang",
+                  "value": "{{lang}}",
+                  "disabled": false
+                }
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Create (admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/rewards",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "rewards"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Val 5€\",\n  \"description\": \"Saldo comerç local\",\n  \"type\": \"balance\",\n  \"points_required\": 1000,\n  \"value\": \"5\",\n  \"stock\": 50,\n  \"status\": \"active\",\n  \"shop_ids\": [],\n  \"i18n_source_lang\": \"ca\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Get one",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/rewards/{{reward_id}}?lang={{lang}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "rewards",
+                "{{reward_id}}"
+              ],
+              "query": [
+                {
+                  "key": "lang",
+                  "value": "{{lang}}",
+                  "disabled": false
+                }
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Patch (admin)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/rewards/{{reward_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "rewards",
+                "{{reward_id}}"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"points_required\": 900,\n  \"stock\": 40\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Upload media",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/rewards/{{reward_id}}/media",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "rewards",
+                "{{reward_id}}",
+                "media"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "",
+                  "description": "Image file (png/jpg/webp)"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete media",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/rewards/{{reward_id}}/media",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "rewards",
+                "{{reward_id}}",
+                "media"
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Get media (public)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/rewards/{{reward_id}}/media",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "rewards",
+                "{{reward_id}}",
+                "media"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Delete reward",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/rewards/{{reward_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "rewards",
+                "{{reward_id}}"
+              ]
+            },
+            "description": ""
+          }
+        }
+      ]
+    },
+    {
+      "name": "10 · Redemptions",
+      "description": "",
+      "item": [
+        {
+          "name": "Redeem (resident)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/redemptions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "redemptions"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reward_id\": \"{{reward_id}}\",\n  \"shop_id\": \"{{shop_id}}\",\n  \"amount\": \"5.00\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/redemptions?",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "redemptions"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "pending_use",
+                  "disabled": true
+                },
+                {
+                  "key": "reward_type",
+                  "value": "balance",
+                  "disabled": true
+                },
+                {
+                  "key": "shop_id",
+                  "value": "{{shop_id}}",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Validate voucher",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Acting-Shop-Id",
+                "value": "{{shop_id}}",
+                "description": "Admin acting as shop (BO comercio)"
+              },
+              {
+                "key": "X-Active-Role",
+                "value": "{{active_role}}",
+                "disabled": true,
+                "description": "Optional: resident|merchant|admin"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/redemptions/validate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "redemptions",
+                "validate"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"{{voucher_code}}\",\n  \"amount_applied\": \"5.00\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Patch status (admin)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/redemptions/{{redemption_id}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "redemptions",
+                "{{redemption_id}}",
+                "status"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"delivered\",\n  \"note\": \"Entregat\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Use by id",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Acting-Shop-Id",
+                "value": "{{shop_id}}",
+                "description": "Admin acting as shop (BO comercio)"
+              },
+              {
+                "key": "X-Active-Role",
+                "value": "{{active_role}}",
+                "disabled": true,
+                "description": "Optional: resident|merchant|admin"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/redemptions/{{redemption_id}}/use",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "redemptions",
+                "{{redemption_id}}",
+                "use"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount_applied\": \"5.00\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "11 · Payments",
+      "description": "",
+      "item": [
+        {
+          "name": "Debts (admin)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments/debts",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "payments",
+                "debts"
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "List (admin)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments?",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "payments"
+              ],
+              "query": [
+                {
+                  "key": "shop_id",
+                  "value": "{{shop_id}}",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Create settlement (admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "payments"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"shop_id\": \"{{shop_id}}\",\n  \"redemption_ids\": [\n    \"{{redemption_id}}\"\n  ],\n  \"note\": \"Liquidació\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "12 · Scans",
+      "description": "",
+      "item": [
+        {
+          "name": "Scan QR (resident)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/scans",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "scans"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"qr_code\": \"{{qr_code}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "13 · Residents",
+      "description": "",
+      "item": [
+        {
+          "name": "List (admin)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/residents?",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "residents"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Get one (admin)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/residents/{{resident_id}}?include_activity=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "residents",
+                "{{resident_id}}"
+              ],
+              "query": [
+                {
+                  "key": "include_activity",
+                  "value": "true",
+                  "disabled": false
+                }
+              ]
+            },
+            "description": ""
+          }
+        }
+      ]
+    },
+    {
+      "name": "14 · Stats",
+      "description": "",
+      "item": [
+        {
+          "name": "Admin stats",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/stats/admin",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "stats",
+                "admin"
+              ]
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "Merchant stats",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Acting-Shop-Id",
+                "value": "{{shop_id}}",
+                "description": "Admin acting as shop (BO comercio)"
+              },
+              {
+                "key": "X-Active-Role",
+                "value": "{{active_role}}",
+                "disabled": true,
+                "description": "Optional: resident|merchant|admin"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/stats/merchant",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "stats",
+                "merchant"
+              ]
+            },
+            "description": ""
+          }
+        }
+      ]
+    }
+  ]
+}
