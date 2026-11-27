@@ -5,12 +5,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
-from app.demo import sync_user_fake_partition
 from app.deps import get_current_user
 from app.qa import is_qa_email, is_qa_postal_code
 from app.models import User
 from app.schemas import UpdateUserIn, UserOut
 from app.services.slugs import allocate_user_slug
+from app.services.residency import move_resident
 from app.services.towns import get_postal_code
 from app.utils.slug import slugify
 
@@ -36,21 +36,18 @@ async def update_me(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="QA accounts cannot leave the QA territory",
             )
-        if code is None:
-            user.postal_code = None
-            user.postal_ref = None
-        else:
+        if code is not None:
             postal = await get_postal_code(db, code)
             if postal is None:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Unknown postal code",
                 )
-            user.postal_code = postal.postal_code
-            user.postal_ref = postal
-        # Demo KM0 (00000) lives on the is_fake partition; keep the user flag
-        # in sync so /shops/for-me and POST /scans see the showcase catalog.
-        sync_user_fake_partition(user, user.postal_code)
+            # May stay where it is: an account does not cross from a real
+            # municipality to the demo, and leaving the demo empties its
+            # balance (app/services/residency.py).
+            await move_resident(db, user, postal)
+        # ``null`` is ignored: an account that has a municipality keeps one.
         data.pop("postal_code")
 
     # The birth date decides the day of a yearly bonus: once set it stays.
