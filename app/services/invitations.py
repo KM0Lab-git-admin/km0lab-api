@@ -20,7 +20,7 @@ from app.models import (
     User,
 )
 from app.services.action_grants import action_is_configured, find_active_action
-from app.services.points import apply_points
+from app.services.points import apply_points, lock_user_points
 from app.services.towns import get_postal_code
 
 KIND_PERSON = "person"
@@ -208,6 +208,43 @@ async def snapshot_reward_points(
     return settings.invite_person_points
 
 
+async def friend_limit(
+    db: AsyncSession, *, user: User, town_id: str | None = None
+) -> int | None:
+    """How many friends ``user`` can be rewarded for, or None for no limit.
+
+    It is the "uses per user" of the municipality's invitation action, so
+    each municipality sets its own from the backoffice.
+    """
+    action = await find_active_action(
+        db, action_type=ACTION_INVITE_PERSON, user=user, town_id=town_id
+    )
+    return action.per_user_limit if action is not None else None
+
+
+async def friends_rewarded(
+    db: AsyncSession, *, inviter_user_id: str, town_id: str | None
+) -> int:
+    """Friends of this person who already earned them points, in that
+    municipality. A friend who came in over the limit does not count."""
+    if not town_id:
+        return 0
+    return int(
+        await db.scalar(
+            select(func.count())
+            .select_from(InvitationConversion)
+            .join(InvitationLink, InvitationLink.id == InvitationConversion.link_id)
+            .where(
+                InvitationLink.inviter_user_id == inviter_user_id,
+                InvitationConversion.kind == KIND_PERSON,
+                InvitationConversion.town_id == town_id,
+                InvitationConversion.reward_points > 0,
+            )
+        )
+        or 0
+    )
+
+
 async def apply_invitee_postal_code(
     db: AsyncSession, user: User, postal_code: str | None
 ) -> None:
@@ -306,6 +343,18 @@ async def convert_person_signup(
     points = await snapshot_reward_points(
         db, kind=KIND_PERSON, town_id=link.town_id, user=inviter
     )
+    if points > 0:
+        # Over the limit the friend still counts as invited, but pays
+        # nothing. The inviter's row is locked first so that two friends
+        # finishing at the same moment cannot both take the last place.
+        limit = await friend_limit(db, user=inviter, town_id=link.town_id)
+        if limit is not None:
+            await lock_user_points(db, inviter)
+            rewarded = await friends_rewarded(
+                db, inviter_user_id=inviter.id, town_id=link.town_id
+            )
+            if rewarded >= limit:
+                points = 0
     conversion = InvitationConversion(
         link_id=link.id,
         kind=KIND_PERSON,

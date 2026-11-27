@@ -4,6 +4,8 @@ Decided on 27-11-2026 for every municipality (and for the demonstration):
 
 - Signing up gives 50 points, scanning a shop's QR 100, a friend who
   completes their signup 50. Every other action is switched off.
+- A person is rewarded for three friends at most (the "uses per user" of
+  the invitation action; each municipality can change it in the backoffice).
 - Each shop gives its points once per resident: the wait before the same
   shop pays again goes from 30 days to a year, longer than the pilot. (The
   app says "once" instead of showing a date that far away.)
@@ -40,6 +42,8 @@ POINTS_PER_EURO = 100
 # Days before the same shop pays the same resident again: "once" in a pilot
 # of two months, and still once if it runs long.
 SCAN_COOLDOWN_DAYS = 365
+# Friends a person can be rewarded for inviting.
+INVITE_FRIENDS_LIMIT = 3
 
 # The only ways to earn points, and what each gives.
 ACTION_POINTS: dict[str, int] = {
@@ -209,6 +213,15 @@ async def set_pilot_points(
                     action.cooldown_days = SCAN_COOLDOWN_DAYS
             if action.is_fake == main_partition:
                 report.scan_cooldown_days = SCAN_COOLDOWN_DAYS
+        if action.type == "invite_person":
+            if change(
+                "action",
+                f"{label}: friends rewarded per person",
+                action.per_user_limit if action.per_user_limit is not None else "no limit",
+                INVITE_FRIENDS_LIMIT,
+            ):
+                if apply:
+                    action.per_user_limit = INVITE_FRIENDS_LIMIT
         if action.type in ACTION_POINTS:
             points = ACTION_POINTS[action.type]
             if change("action", f"{label}: points", action.points, points) and apply:
@@ -245,6 +258,11 @@ async def set_pilot_points(
                         **(
                             {"cooldown_days": SCAN_COOLDOWN_DAYS}
                             if spec["type"] == "qr_scan"
+                            else {}
+                        ),
+                        **(
+                            {"per_user_limit": INVITE_FRIENDS_LIMIT}
+                            if spec["type"] == "invite_person"
                             else {}
                         ),
                     }

@@ -21,6 +21,8 @@ from app.services.invitations import (
     VALID_KINDS,
     conversion_to_dict,
     count_share_events,
+    friend_limit,
+    friends_rewarded,
     get_or_create_link,
     grant_conversion_reward,
     list_inviter_conversions,
@@ -64,7 +66,13 @@ async def my_invite_summary(
     db: AsyncSession = Depends(get_db),
 ):
     data = await summary_for_inviter(db, inviter_user_id=user.id)
-    return InviteSummaryOut(**data)
+    return InviteSummaryOut(
+        **data,
+        friend_limit=await friend_limit(db, user=user),
+        friends_rewarded=await friends_rewarded(
+            db, inviter_user_id=user.id, town_id=user.town_id
+        ),
+    )
 
 
 @router.get("/me/conversions", response_model=InviteConversionListOut)

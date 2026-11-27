@@ -40,6 +40,10 @@ class InviteSummaryOut(BaseModel):
     businesses_registered: int
     points_earned: int
     points_pending: int
+    # Friends this person can still be rewarded for: the limit of their
+    # municipality (null = no limit) and how many already paid.
+    friend_limit: int | None = None
+    friends_rewarded: int = 0
 
 
 class InviteConversionOut(BaseModel):
