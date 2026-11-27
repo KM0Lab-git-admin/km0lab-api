@@ -4,13 +4,20 @@ Decided on 27-11-2026 for every municipality (and for the demonstration):
 
 - Signing up gives 50 points, scanning a shop's QR 100, a friend who
   completes their signup 50. Every other action is switched off.
+- Each shop gives its points once per resident: the wait before the same
+  shop pays again goes from 30 days to a year, longer than the pilot. (The
+  app says "once" instead of showing a date that far away.)
 - 100 points are worth 1 EUR: a reward whose value is an amount in euros
-  costs that amount times 100. The KM0 LAB T-shirt costs 1000.
+  costs that amount times 100. The rewards without an amount have their
+  price written here (``FIXED_REWARD_POINTS``): the T-shirt 1000, the rest
+  ten times what they cost on the old scale.
+- Discounts in percent are switched off: the pilot's rewards are KM0 LAB's,
+  and a percentage has no fair price in points.
 
 ``set_pilot_points`` puts a municipality in that state and says what it
 changed. It can be run again: it writes values, it never multiplies what is
-there. Rewards the rule does not cover (a percentage, a product with no
-price) are left alone and listed, because someone has to decide them.
+there. A reward none of this covers is left alone and listed, because
+someone has to decide it.
 
 The QA territory is not touched: its numbers belong to the tests.
 """
@@ -30,6 +37,9 @@ from app.qa import QA_EMAIL_DOMAIN, QA_SLUG_PREFIX
 
 SCAN_POINTS = 100
 POINTS_PER_EURO = 100
+# Days before the same shop pays the same resident again: "once" in a pilot
+# of two months, and still once if it runs long.
+SCAN_COOLDOWN_DAYS = 365
 
 # The only ways to earn points, and what each gives.
 ACTION_POINTS: dict[str, int] = {
@@ -39,7 +49,26 @@ ACTION_POINTS: dict[str, int] = {
 }
 
 # Rewards with a price of their own, by name (without the "[DEMO] " mark).
-FIXED_REWARD_POINTS: dict[str, int] = {"samarreta km0 lab": 1000}
+FIXED_REWARD_POINTS: dict[str, int] = {
+    "samarreta km0 lab": 1000,
+    "bossa km0 lab": 1200,
+    "bossa tote km0": 1200,
+    "ampolla d'oli local": 1800,
+    "gorra km0 lab": 1800,
+    "entrada de cinema": 2000,
+}
+
+# A reward that reached the catalog with a test name, and its real one.
+RENAMED_REWARDS: dict[str, dict[str, str]] = {
+    "bossa de regal de kmlab super chula de la muerte": {
+        "ca": "Bossa KM0 LAB",
+        "es": "Bolsa KM0 LAB",
+        "en": "KM0 LAB bag",
+    },
+}
+
+_DEMO_MARK = re.compile(r"^\s*(\[demo\]\s*)", re.I)
+_PERCENT = re.compile(r"^\s*\d+(?:[.,]\d+)?\s*%\s*$")
 
 _EUROS = re.compile(r"^\s*(\d+(?:[.,]\d{1,2})?)\s*(?:€|eur|euros?)\s*$", re.I)
 
@@ -85,9 +114,18 @@ def euros_of(value: str | None) -> float | None:
     return float(match.group(1).replace(",", "."))
 
 
+def plain_reward_name(name: str) -> str:
+    """The name as the table above writes it: no "[DEMO] " mark, any case."""
+    return _DEMO_MARK.sub("", name).strip().casefold()
+
+
+def is_percent_discount(type_: str, value: str | None) -> bool:
+    return type_ == "discount" and bool(_PERCENT.match(value or ""))
+
+
 def reward_points_for(name: str, value: str | None) -> int | None:
     """What the rule says a reward costs, or None when it says nothing."""
-    plain = re.sub(r"^\s*\[demo\]\s*", "", name, flags=re.I).strip().casefold()
+    plain = plain_reward_name(name)
     if plain in FIXED_REWARD_POINTS:
         return FIXED_REWARD_POINTS[plain]
     euros = euros_of(value)
@@ -160,8 +198,17 @@ async def set_pilot_points(
         label = f"{action.type} «{action.name}»"
         if action.is_fake != main_partition:
             label += " (demo partition)" if action.is_fake else " (real partition)"
-        if action.type == "qr_scan" and action.is_fake == main_partition:
-            report.scan_cooldown_days = action.cooldown_days
+        if action.type == "qr_scan":
+            if change(
+                "action",
+                f"{label}: days before the same shop pays again",
+                action.cooldown_days,
+                SCAN_COOLDOWN_DAYS,
+            ):
+                if apply:
+                    action.cooldown_days = SCAN_COOLDOWN_DAYS
+            if action.is_fake == main_partition:
+                report.scan_cooldown_days = SCAN_COOLDOWN_DAYS
         if action.type in ACTION_POINTS:
             points = ACTION_POINTS[action.type]
             if change("action", f"{label}: points", action.points, points) and apply:
@@ -195,6 +242,11 @@ async def set_pilot_points(
                         "is_fake": main_partition,
                         "points": points,
                         "active": True,
+                        **(
+                            {"cooldown_days": SCAN_COOLDOWN_DAYS}
+                            if spec["type"] == "qr_scan"
+                            else {}
+                        ),
                     }
                 )
             )
@@ -208,7 +260,34 @@ async def set_pilot_points(
         )
     ).scalars().all()
     for reward in rewards:
-        target = reward_points_for(reward.name, reward.value)
+        new_name = RENAMED_REWARDS.get(plain_reward_name(reward.name))
+        if new_name is not None:
+            mark = _DEMO_MARK.match(reward.name)
+            prefix = mark.group(1) if mark else ""
+            report.changes.append(
+                Change("reward", "name", f"«{reward.name}»", f"«{prefix}{new_name['ca']}»")
+            )
+            if apply:
+                reward.name = f"{prefix}{new_name['ca']}"
+                reward.name_i18n = {
+                    lang: f"{prefix}{text}" for lang, text in new_name.items()
+                }
+                reward.i18n_source_lang = "ca"
+            name_now = new_name["ca"]
+        else:
+            name_now = reward.name
+
+        if is_percent_discount(reward.type, reward.value):
+            # Switched off; a sold-out or already inactive one stays as it is.
+            if reward.status == "active":
+                change("reward", f"«{name_now}»: state", "on", "off")
+                if apply:
+                    reward.status = "inactive"
+            else:
+                report.unchanged += 1
+            continue
+
+        target = reward_points_for(name_now, reward.value)
         if target is None:
             report.undecided.append(
                 Undecided(
@@ -221,7 +300,7 @@ async def set_pilot_points(
                 )
             )
             continue
-        if change("reward", f"«{reward.name}»", reward.points_required, target):
+        if change("reward", f"«{name_now}»", reward.points_required, target):
             if apply:
                 reward.points_required = target
 

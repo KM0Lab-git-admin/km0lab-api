@@ -12,17 +12,20 @@ What it leaves (``app/services/pilot_points.py``):
 
 - Signing up 50 points, scanning a QR 100, inviting a friend 50. Every
   other action (birthday, inviting a business, the rest) switched off.
+- Each shop pays a resident once: the wait to scan it again becomes 365 days.
 - 100 points = 1 EUR. A reward whose value is an amount in euros costs that
-  amount x 100; the KM0 LAB T-shirt, 1000. The number on each shop's card
-  and "points per 1 EUR" in the municipality's settings follow.
+  amount x 100; the ones without an amount have a fixed price (T-shirt
+  1000, bag 1200, oil and cap 1800, cinema 2000). Discounts in percent are
+  switched off. The number on each shop's card and "points per 1 EUR" in
+  the municipality's settings follow.
 
 Every municipality, the demonstration included; never the QA territory.
 ``--town`` limits it to one (name, slug, one of its towns or postal codes).
 
 It can be run again: it sets values, it does not multiply what is there.
-Rewards the rule does not cover (percentages, products without a price) are
-left as they are and listed under "TO DECIDE". Points residents already hold
-are not touched: the last lines say how many accounts hold some.
+A reward none of the rules covers is left as it is and listed under "TO
+DECIDE". Points residents already hold are not touched: the last lines say
+how many accounts hold some.
 
 Without --apply it only reads. With --target railway --apply it writes to
 UAT, so it only runs when the user asks to publish.
@@ -54,11 +57,6 @@ def _print_report(report) -> None:
         print(f"   {KIND_LABEL[c.kind]:<13}{c.what}: {c.before} -> {c.after}")
     if report.changes and report.unchanged:
         print(f"   ({report.unchanged} other values already right)")
-    days = report.scan_cooldown_days
-    print(
-        "   same shop again: "
-        + (f"every {days} days" if days is not None else "every 30 days (no rule set)")
-    )
     if report.undecided:
         print("   TO DECIDE (left as they are):")
         for r in report.undecided:

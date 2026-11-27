@@ -36,6 +36,8 @@ async def _malgrat_as_today(db) -> Town:
         ("Bono 50 €", "balance", 500, "50 €"),
         ("Samarreta KM0 LAB", "merchandise", 300, None),
         ("10% de descompte", "discount", 1000, "10%"),
+        ("Gorra KM0 LAB", "merchandise", 180, "1 unitat"),
+        ("Bossa de regal de KMLab super chula de la muerte", "merchandise", 120, None),
         ("Pa de pagès", "product", 60, None),
     ):
         db.add(
@@ -79,7 +81,8 @@ def test_price_of_a_reward():
     assert euros_of(None) is None
     assert reward_points_for("[DEMO] Bono 20 €", "20€") == 2000
     assert reward_points_for("[DEMO] Samarreta KM0 LAB", None) == 1000
-    assert reward_points_for("Gorra KM0 LAB", "1 unitat") is None
+    assert reward_points_for("[DEMO] Gorra KM0 LAB", "1 unitat") == 1800
+    assert reward_points_for("Pa de pagès", None) is None
 
 
 async def test_rehearsal_reports_and_touches_nothing(db_session):
@@ -107,8 +110,8 @@ async def test_three_ways_to_earn_and_one_scale(db_session):
     earning = {t: a.points for t, a in actions.items() if a.active}
     assert earning == {"signup": 50, "qr_scan": 100, "invite_person": 50}
     assert not actions["birthday"].active and not actions["invite_business"].active
-    # The wait before scanning the same shop again is not this script's.
-    assert actions["qr_scan"].cooldown_days == 30 == report.scan_cooldown_days
+    # Each shop pays a resident once: a year, longer than the pilot.
+    assert actions["qr_scan"].cooldown_days == 365 == report.scan_cooldown_days
 
     shop = (await db_session.execute(select(Shop))).scalars().one()
     await db_session.refresh(shop)
@@ -118,11 +121,29 @@ async def test_three_ways_to_earn_and_one_scale(db_session):
         "Bono 5 €": 500,
         "Bono 50 €": 5000,
         "Samarreta KM0 LAB": 1000,
-        # Not covered by the rule: untouched, and said so.
+        "Gorra KM0 LAB": 1800,
+        # The test name is gone, and the bag has its price.
+        "Bossa KM0 LAB": 1200,
+        # A discount in percent keeps its points and is switched off.
         "10% de descompte": 1000,
+        # Covered by no rule: untouched, and said so.
         "Pa de pagès": 60,
     }
-    assert {u.name for u in report.undecided} == {"10% de descompte", "Pa de pagès"}
+    assert {u.name for u in report.undecided} == {"Pa de pagès"}
+    rows = (
+        await db_session.execute(
+            select(Reward).execution_options(populate_existing=True)
+        )
+    ).scalars().all()
+    status = {r.name: r.status for r in rows}
+    assert status["10% de descompte"] == "inactive"
+    assert status["Bossa KM0 LAB"] == status["Bono 5 €"] == "active"
+    bag = next(r for r in rows if r.name == "Bossa KM0 LAB")
+    assert bag.name_i18n == {
+        "ca": "Bossa KM0 LAB",
+        "es": "Bolsa KM0 LAB",
+        "en": "KM0 LAB bag",
+    }
 
 
 async def test_running_it_again_changes_nothing(db_session):
@@ -182,5 +203,7 @@ async def test_demo_is_included_and_the_qa_territory_is_not(db_session):
     prices = await _rewards(db_session, demo)
     assert prices["[DEMO] Bono 5 €"] == 500
     assert prices["[DEMO] Samarreta KM0 LAB"] == 1000
+    assert prices["[DEMO] Gorra KM0 LAB"] == 1800
+    assert prices["[DEMO] Entrada de cinema"] == 2000
     # In the catalog itself nothing is "own": it is the catalog.
     assert not any(u.own for u in report.undecided)
