@@ -66,6 +66,9 @@ class Settings(BaseSettings):
 
     # Deep-link encoded in shop QR PNGs (app extracts ?c=token)
     qr_scan_base_url: str = "https://app.km0lab.com/scan"
+    # Where a shop signs in to its panel. It goes in the email a shop
+    # gets when it is registered; empty = that email is not sent.
+    backoffice_url: str = ""
 
     # OpenAI — used to auto-fill missing i18n languages on save.
     # If empty, the API copies the source text into empty languages.

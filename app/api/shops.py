@@ -1,5 +1,6 @@
 """Shop CRUD (admin) + merchant profile / QR / binary media."""
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import (
@@ -17,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db import get_db
+from app.email import send_shop_invite_email
 from app.demo import resolve_public_demo
 from app.qa import is_qa_postal_code
 from app.deps import (
@@ -71,6 +73,8 @@ from app.services.localities import (
     resolve_shop_locality,
 )
 from app.services.towns import get_postal_code
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/shops", tags=["shops"])
 
@@ -587,7 +591,38 @@ async def create_shop(
     await ensure_shop_qr(db, shop)
     await db.commit()
     await db.refresh(shop)
+    await _tell_the_shop(shop, town, lang=default_lang)
     return await _shop_out(db, shop, fallback_lang=default_lang)
+
+
+async def _tell_the_shop(shop: Shop, town: Town | None, *, lang: str) -> None:
+    """Email the shop that it has been registered and how to get in.
+
+    Registering it with that email is the invitation, and nothing else tells
+    the shop. Make-believe shops (demo, QA) are told nothing. If the email
+    fails the shop is registered all the same: the administrator can still
+    tell them, as before.
+    """
+    if shop.is_fake:
+        return
+    place = (
+        shop.locality.name if shop.locality is not None else (town.name if town else "")
+    )
+    # "At the suggestion of X" only when X is an organisation the shop knows
+    # (the council, the traders' association), not the place's own name.
+    entity = (town.entity_name if town else "").strip()
+    if entity.casefold() in {place.casefold(), (town.name if town else "").casefold()}:
+        entity = ""
+    try:
+        await send_shop_invite_email(
+            shop.contact_email,
+            shop_name=shop.name,
+            town=place,
+            entity=entity or None,
+            lang=lang,
+        )
+    except Exception:
+        logger.exception("Shop invite email could not be sent (shop %s)", shop.id)
 
 
 @router.get("/me", response_model=ShopOut)
