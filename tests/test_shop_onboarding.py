@@ -8,8 +8,9 @@ the ways that used to go wrong in the backoffice.
 
 import pytest
 
-from app.models import User
-from app.services.shop_qr import render_qr_png
+from app.config import get_settings
+from app.models import ShopMedia, User
+from app.services.shop_qr import build_scan_url, render_qr_png
 from tests._municipalities import API, admin_headers, malgrat
 
 pytestmark = pytest.mark.asyncio
@@ -175,3 +176,39 @@ async def test_a_shop_with_its_owner_is_not_given_to_someone_else(
         )
     ).all()
     assert [row.email for row in owners] == [OWNER]
+
+
+# ── The address inside the QR ─────────────────────────────────────────
+
+
+async def test_qr_is_redrawn_when_its_address_changes(
+    client, db_session, capture_otp, monkeypatch
+):
+    """Shops registered before ``QR_SCAN_BASE_URL`` was set must not keep
+    handing out a QR to the old address."""
+    town = await malgrat(db_session)
+    admin = await admin_headers(db_session, town, "08380")
+    shop = await _register(client, admin)
+    owner = _bearer(await _login(client, capture_otp, OWNER))
+    before = (await client.get(f"{API}/shops/me/qr", headers=owner)).json()
+
+    monkeypatch.setattr(
+        get_settings(), "qr_scan_base_url", "https://app.uat.km0lab.com/scan"
+    )
+    after = (await client.get(f"{API}/shops/me/qr", headers=owner)).json()
+
+    assert after["qr_code"] == before["qr_code"] == shop["qr_code"]
+    assert after["scan_url"] == f"https://app.uat.km0lab.com/scan?c={shop['qr_code']}"
+    assert after["scan_url"] == build_scan_url(shop["qr_code"])
+    # A new picture, under a new address so no browser shows the old one.
+    assert after["png_url"] != before["png_url"]
+    png = await client.get(after["png_url"])
+    assert png.content == render_qr_png(after["scan_url"])
+    rows = (
+        await db_session.execute(
+            ShopMedia.__table__.select().where(
+                ShopMedia.shop_id == shop["id"], ShopMedia.kind == "qr"
+            )
+        )
+    ).all()
+    assert len(rows) == 1

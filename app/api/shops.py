@@ -195,7 +195,7 @@ async def _qr_out(db: AsyncSession, shop: Shop, *, is_fake: bool) -> QrOut:
         shop_id=shop.id,
         qr_code=shop.qr_code,
         scan_url=build_scan_url(shop.qr_code),
-        png_url=qr_png_url(shop.id),
+        png_url=qr_png_url(shop),
         visit_points=shop.visit_points,
         total_scans=total_scans,
         points_awarded=int(points_awarded),

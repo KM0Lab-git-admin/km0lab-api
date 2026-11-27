@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import secrets
 
@@ -31,19 +32,26 @@ def render_qr_png(data: str) -> bytes:
 
 
 async def ensure_shop_qr(db: AsyncSession, shop: Shop) -> ShopMedia:
-    """Ensure shop has a stable qr_code token and a PNG in shop_media.
+    """Ensure shop has a stable qr_code token and its PNG in shop_media.
 
-    Idempotent: does not rotate an existing token. Creates PNG if missing.
+    Idempotent: does not rotate an existing token. The PNG is the picture of
+    ``build_scan_url``: if the address the QR must open changes
+    (``QR_SCAN_BASE_URL``), the stored picture is redrawn the next time it
+    is asked for, so no shop keeps handing out a QR to the old address.
     """
     if not shop.qr_code:
         shop.qr_code = secrets.token_urlsafe(16)
         await db.flush()
 
+    png = render_qr_png(build_scan_url(shop.qr_code))
     existing = await get_shop_media(db, shop.id, QR_KIND)
     if existing:
+        if existing.data != png:
+            existing.data = png
+            existing.byte_size = len(png)
+            await db.flush()
         return existing
 
-    png = render_qr_png(build_scan_url(shop.qr_code))
     row = ShopMedia(
         shop_id=shop.id,
         kind=QR_KIND,
@@ -56,5 +64,8 @@ async def ensure_shop_qr(db: AsyncSession, shop: Shop) -> ShopMedia:
     return row
 
 
-def qr_png_url(shop_id: str) -> str:
-    return media_public_path(shop_id, QR_KIND)
+def qr_png_url(shop: Shop) -> str:
+    """Where the PNG is served. The ``v`` changes with the address inside the
+    QR, so a browser never shows a cached picture of the old one."""
+    version = hashlib.sha1(build_scan_url(shop.qr_code or "").encode()).hexdigest()
+    return f"{media_public_path(shop.id, QR_KIND)}?v={version[:10]}"
