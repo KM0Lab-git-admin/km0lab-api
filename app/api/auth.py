@@ -412,7 +412,8 @@ async def request_otp(
         raise _otp_error(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             OTP_SEND_FAILED,
-            "No hem pogut enviar el correu. Torna-ho a provar d'aquí a uns minuts.",
+            # True for a blip and for a used-up quota alike: no promise of minutes.
+            "Ara mateix no podem enviar correus. Prova-ho més tard.",
         ) from None
 
     # The new code is out: keep it and the most recent earlier ones, retire
