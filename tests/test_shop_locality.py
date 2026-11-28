@@ -102,14 +102,19 @@ async def test_public_signup_lands_in_the_town_of_its_postal_code(
     baix = await baix_montseny(db_session)
     await db_session.commit()
 
+    owner = User(email="fusteria@test.cat", slug="fusteria", points=0)
+    db_session.add(owner)
+    await db_session.commit()
+    token = create_access_token(owner.id, roles=["resident"], town_id=None, shop_id=None)
     r = await client.post(
         f"{API}/shops/public-signup",
         json={
             "name": "Fusteria Riells",
-            "tax_id": "B12345678",
+            "tax_id": "B12345674",
             "contact_email": "fusteria@test.cat",
             "postal_code": "17404",
         },
+        headers={"Authorization": f"Bearer {token}"},
     )
     assert r.status_code == 200, r.text
     shop = await db_session.get(Shop, r.json()["shop_id"])

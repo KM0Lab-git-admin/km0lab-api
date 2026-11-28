@@ -21,6 +21,15 @@ class VerifyOtpIn(BaseModel):
     terms_version: str | None = Field(default=None, max_length=16)
 
 
+class ShopRequestOut(BaseModel):
+    """A shop this person asked to register and is not live."""
+
+    shop_id: str
+    name: str
+    # review (waiting for validation) | rejected
+    status: str
+
+
 class UserOut(BaseModel):
     id: str
     email: EmailStr
@@ -46,6 +55,9 @@ class UserOut(BaseModel):
     terms_version: str | None = None
     terms_accepted_at: datetime | None = None
     is_fake: bool = False
+    # Set while the shop this person asked for waits or was rejected,
+    # so the panel can say so instead of "this email has no shop".
+    shop_request: ShopRequestOut | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

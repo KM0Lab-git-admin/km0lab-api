@@ -21,7 +21,9 @@ Circuito last-click. Un código reutilizable por prescriptor y tipo (`person` | 
 | POST | `/api/v1/invites/events` | opcional |
 | POST | `/api/v1/auth/request-otp` | `invite_code`, `postal_code` opcionales |
 | POST | `/api/v1/auth/verify-otp` | `invite_code`, `postal_code` opcionales |
-| POST | `/api/v1/shops/public-signup` | JWT opcional |
+| POST | `/api/v1/shops/public-signup` | JWT de quien lo pide; el comercio queda en `review` |
+| POST | `/api/v1/shops/{id}/approve` | admin pueblo; aquí se paga a quien lo invitó |
+| POST | `/api/v1/shops/{id}/reject` | admin pueblo; `reason` obligatorio |
 | GET | `/api/v1/admin/invites` | admin pueblo |
 | POST | `/api/v1/admin/invites/conversions/{id}/retry-reward` | admin pueblo |
 

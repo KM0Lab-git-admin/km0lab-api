@@ -18,8 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db import get_db
-from app.email import send_shop_invite_email
-from app.demo import resolve_public_demo
+from app.catalog.email_shop_review import ADMIN_NEW, APPROVED, RECEIVED, REJECTED
+from app.email import send_shop_invite_email, send_shop_review_email
+from app.demo import is_demo_postal_code, resolve_public_demo
 from app.qa import is_qa_postal_code
 from app.deps import (
     assert_shop_scope,
@@ -36,7 +37,6 @@ from app.roles import (
     ROLE_ADMIN,
     ROLE_MERCHANT,
     ROLE_RESIDENT,
-    IncompatibleRolesError,
     flags_from_roles,
 )
 from app.schemas import (
@@ -48,7 +48,7 @@ from app.schemas import (
     ShopUpdate,
 )
 from app.schemas.invites import ShopPublicSignupIn, ShopPublicSignupOut
-from app.schemas.shops import ShopMediaOut
+from app.schemas.shops import ShopMediaOut, ShopRejectIn, ShopReviewOut
 from app.services.action_grants import ACTION_TYPE_QR_SCAN, find_active_action
 from app.services.i18n_fields import apply_text_i18n
 from app.services.shop_categories import resolve_category_slugs
@@ -66,12 +66,23 @@ from app.services.shop_qr import (
     ensure_shop_qr,
     qr_png_url,
 )
-from app.services.invitations import attach_business_conversion, convert_business_activation
+from app.services.invitations import attach_business_conversion
 from app.services.localities import (
     LocalityRefused,
     locality_for_postal_code,
     resolve_shop_locality,
 )
+from app.services.shop_review import (
+    SHOP_REJECTED,
+    SHOP_REVIEW,
+    STANDING,
+    ReviewRefused,
+    approve_shop,
+    reject_shop,
+    review_checks,
+    shops_with_tax_id,
+)
+from app.services.tax_id import is_valid_tax_id, normalize_tax_id
 from app.services.towns import get_postal_code
 
 logger = logging.getLogger(__name__)
@@ -184,6 +195,9 @@ async def _apply_shop_description_i18n(
 
 
 async def _qr_out(db: AsyncSession, shop: Shop, *, is_fake: bool) -> QrOut:
+    if shop.status in (SHOP_REVIEW, SHOP_REJECTED):
+        # No QR exists for a shop nobody has approved.
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="shop_in_review")
     await ensure_shop_qr(db, shop)
     total_scans = (
         await db.execute(
@@ -271,43 +285,65 @@ def _public_signup_limit() -> str:
 async def public_shop_signup(
     request: Request,
     payload: ShopPublicSignupIn,
-    user: User | None = Depends(get_optional_user),
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    postal = await get_postal_code(db, payload.postal_code.strip())
-    if postal is None:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Unknown postal code")
-    town = await db.get(Town, postal.town_id)
-    if town is None:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Unknown postal code")
+    """A shop asks to join. It waits in ``review`` until the administrator
+    of its municipality approves it: nothing of it is public and it has no
+    QR until then (``app/services/shop_review.py``).
 
-    if user is not None:
-        if user.has_role(ROLE_ADMIN):
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST, detail="Admin cannot also be merchant"
-            )
-        if user.has_role(ROLE_MERCHANT) or user.shop_id:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                detail="Merchant already has a shop",
-            )
-
+    The request carries the session of whoever asks, and the contact email
+    is theirs: that is the confirmed email. What the machine can tell is
+    wrong (tax id, postal code, duplicates) is refused here.
+    """
     email = payload.contact_email.lower()
-    # Shops registered in the QA territory are test data (erasable).
+    if user.email.lower() != email:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="email_not_verified")
+    if user.has_role(ROLE_ADMIN):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, detail="Admin cannot also be merchant"
+        )
+    if user.has_role(ROLE_MERCHANT) or user.shop_id:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Merchant already has a shop",
+        )
+    if not is_valid_tax_id(payload.tax_id):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, detail="tax_id_invalid"
+        )
+
+    postal = await get_postal_code(db, payload.postal_code.strip())
+    town = await db.get(Town, postal.town_id) if postal is not None else None
+    if postal is None or town is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Unknown postal code")
+    # Shops registered in the QA territory are test data (erasable), and
+    # only a test account registers them. Nobody registers a shop in Demo.
     shop_is_fake = is_qa_postal_code(postal.postal_code)
+    if is_demo_postal_code(postal.postal_code) or user.is_fake != shop_is_fake:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, detail="postal_code_not_allowed"
+        )
+
+    # One standing request or shop per email, wherever it is.
     duplicate = (
         await db.execute(
-            select(Shop).where(
-                Shop.town_id == postal.town_id,
+            select(Shop.id).where(
                 Shop.contact_email == email,
-                Shop.status.in_(("pending", "active")),
+                Shop.status.in_(STANDING),
                 Shop.is_fake.is_(shop_is_fake),
             )
         )
-    ).scalars().first()
+    ).first()
     if duplicate:
         raise HTTPException(
             status.HTTP_409_CONFLICT, detail="Shop already registered for this email"
+        )
+    if await shops_with_tax_id(
+        db, town_id=postal.town_id, tax_id=payload.tax_id, is_fake=shop_is_fake
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, detail="tax_id_already_registered"
         )
 
     categories = await resolve_category_slugs(db, payload.categories)
@@ -319,50 +355,72 @@ async def public_shop_signup(
         name=payload.name.strip(),
         categories=categories,
         contact_email=email,
-        tax_id=payload.tax_id.strip(),
-        visit_points=town.default_visit_points if town else 10,
+        tax_id=normalize_tax_id(payload.tax_id),
+        visit_points=town.default_visit_points,
         address=payload.address,
         postal_code=payload.postal_code.strip(),
         phone=payload.phone,
         website=payload.website,
         description=payload.description,
-        status="pending",
+        status=SHOP_REVIEW,
         is_fake=shop_is_fake,
     )
     db.add(shop)
     await db.flush()
-    await ensure_shop_qr(db, shop)
+    # Whoever invited the shop is noted now and paid when it is approved.
     await attach_business_conversion(db, shop=shop, invite_code=payload.invite_code)
-
-    needs_otp = True
-    if (
-        user is not None
-        and not user.has_role(ROLE_MERCHANT)
-        and user.email.lower() == email
-    ):
-        try:
-            user.set_roles(list({*user.roles, ROLE_RESIDENT, ROLE_MERCHANT}))
-        except IncompatibleRolesError as exc:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST, detail=str(exc)
-            ) from exc
-        user.shop_id = shop.id
-        shop.status = "active"
-        await convert_business_activation(db, user=user, shop=shop)
-        needs_otp = False
-
+    applicant_lang = user.lang
     await db.commit()
+    await db.refresh(shop)
+
+    lang = town.default_lang or DEFAULT_LANG
+    await _review_email(RECEIVED, shop, town, to=email, lang=applicant_lang or lang)
+    for admin_email in await _town_admin_emails(db, shop):
+        await _review_email(ADMIN_NEW, shop, town, to=admin_email, lang=lang)
+
     return ShopPublicSignupOut(
         shop_id=shop.id,
         status=shop.status,
         contact_email=email,
-        needs_otp=needs_otp,
-        message=(
-            "Shop activated"
-            if not needs_otp
-            else "Shop created. Verify the contact email with OTP to activate."
-        ),
+        needs_otp=False,
+        message="Request received. The shop goes live when it is approved.",
     )
+
+
+async def _town_admin_emails(db: AsyncSession, shop: Shop) -> list[str]:
+    """Who validates the requests of this shop's municipality."""
+    rows = (
+        await db.execute(
+            select(User).where(User.is_admin.is_(True), User.is_fake.is_(shop.is_fake))
+        )
+    ).scalars().all()
+    return [u.email for u in rows if u.town_id == shop.town_id]
+
+
+async def _review_email(
+    kind: str,
+    shop: Shop,
+    town: Town | None,
+    *,
+    to: str,
+    lang: str,
+    reason: str | None = None,
+) -> None:
+    """One of the emails of a request. Make-believe shops (QA) get none; a
+    failed email never undoes the step that was taken."""
+    if shop.is_fake:
+        return
+    place = (
+        shop.locality.name if shop.locality is not None else (town.name if town else "")
+    )
+    try:
+        await send_shop_review_email(
+            kind, to, shop_name=shop.name, town=place, reason=reason, lang=lang
+        )
+    except Exception:
+        logger.exception(
+            "Shop review email (%s) could not be sent (shop %s)", kind, shop.id
+        )
 
 
 async def _resident_shop_catalog(
@@ -794,6 +852,9 @@ async def get_shop(
     elif user.has_role("merchant"):
         assert_shop_scope(user, shop.id)
         public = False
+    elif shop.status != "active":
+        # Waiting for validation, rejected, switched off: it does not exist.
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Shop not found")
     fallback = await _default_lang_for_shop(db, shop)
     return await _shop_out(
         db, shop, lang=lang, fallback_lang=fallback, public=public
@@ -813,6 +874,13 @@ async def update_shop(
     assert_town_scope(user, shop.town_id)
     default_lang = await _default_lang_for_shop(db, shop)
     data = payload.model_dump(exclude_unset=True)
+    if shop.status in (SHOP_REVIEW, SHOP_REJECTED) and data.get("status") not in (
+        None,
+        shop.status,
+    ):
+        # Switching it on from here would skip the validation, its QR, its
+        # owner and the emails.
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="shop_in_review")
     if data.get("locality_id"):
         data["locality_id"] = await _shop_locality_id(
             db, town_id=shop.town_id, locality_id=data["locality_id"]
@@ -843,4 +911,75 @@ async def update_shop(
         )
     await db.commit()
     await db.refresh(shop)
+    return await _shop_out(db, shop, fallback_lang=default_lang)
+
+
+async def _request_for_admin(db: AsyncSession, user: User, shop_id: str) -> Shop:
+    """A shop of this administrator's municipality and side, or 404/403."""
+    shop = await db.get(Shop, shop_id)
+    if not shop or shop.is_fake != user.is_fake:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Shop not found")
+    assert_town_scope(user, shop.town_id)
+    return shop
+
+
+@router.get("/{shop_id}/review", response_model=ShopReviewOut)
+async def get_shop_review(
+    shop_id: str,
+    user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """What the machine checked on a request, for whoever has to decide."""
+    shop = await _request_for_admin(db, user, shop_id)
+    checks = await review_checks(db, shop)
+    return ShopReviewOut(status=shop.status, **checks.__dict__)
+
+
+@router.post("/{shop_id}/approve", response_model=ShopOut)
+async def approve_shop_request(
+    shop_id: str,
+    user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Approve a request: the shop goes live, gets its QR and its owner, and
+    whoever invited it is paid. Only the municipality's administrator."""
+    shop = await _request_for_admin(db, user, shop_id)
+    try:
+        await approve_shop(db, shop)
+    except ReviewRefused as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=exc.code) from exc
+    await db.commit()
+    await db.refresh(shop)
+    town = await db.get(Town, shop.town_id)
+    default_lang = (town.default_lang if town else DEFAULT_LANG) or DEFAULT_LANG
+    await _review_email(APPROVED, shop, town, to=shop.contact_email, lang=default_lang)
+    return await _shop_out(db, shop, fallback_lang=default_lang)
+
+
+@router.post("/{shop_id}/reject", response_model=ShopOut)
+async def reject_shop_request(
+    shop_id: str,
+    payload: ShopRejectIn,
+    user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Reject a request, saying why. The reason goes in the email to the
+    shop and is not stored; the request is deleted 30 days later."""
+    shop = await _request_for_admin(db, user, shop_id)
+    try:
+        await reject_shop(db, shop)
+    except ReviewRefused as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=exc.code) from exc
+    await db.commit()
+    await db.refresh(shop)
+    town = await db.get(Town, shop.town_id)
+    default_lang = (town.default_lang if town else DEFAULT_LANG) or DEFAULT_LANG
+    await _review_email(
+        REJECTED,
+        shop,
+        town,
+        to=shop.contact_email,
+        lang=default_lang,
+        reason=payload.reason.strip(),
+    )
     return await _shop_out(db, shop, fallback_lang=default_lang)

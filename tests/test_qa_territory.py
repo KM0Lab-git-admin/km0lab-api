@@ -280,6 +280,7 @@ async def test_qa_scan_redeem_and_invite(client, qa):
 
 async def test_qa_business_signup_is_fake_and_activates(client, qa):
     email = "qa+run3-negoci@km0lab.com"
+    _, owner = await _login(client, email)
     r = await client.post(
         f"{API}/shops/public-signup",
         json={
@@ -289,12 +290,16 @@ async def test_qa_business_signup_is_fake_and_activates(client, qa):
             "contact_email": email,
             "postal_code": QA_POSTAL_CODE,
         },
+        headers=owner,
     )
     assert r.status_code == 200, r.text
-    assert r.json()["status"] == "pending"
+    assert r.json()["status"] == "review"
     shop = await qa.get(Shop, r.json()["shop_id"])
     assert shop.is_fake is True
 
+    _, admin = await _login(client, "qa+admin@km0lab.com")
+    r = await client.post(f"{API}/shops/{shop.id}/approve", headers=admin)
+    assert r.status_code == 200, r.text
     body, _ = await _login(client, email)
     assert "merchant" in body["user"]["roles"]
     await qa.refresh(shop)
@@ -313,16 +318,20 @@ async def _activity(client):
         headers=a,
     )
     link = await client.get(f"{API}/invites/me/link", params={"kind": "person"}, headers=a)
-    await _login(client, "qa+run9-b@km0lab.com", invite_code=link.json()["public_code"])
-    await client.post(
+    _, b = await _login(
+        client, "qa+run9-b@km0lab.com", invite_code=link.json()["public_code"]
+    )
+    r = await client.post(
         f"{API}/shops/public-signup",
         json={
             "name": "[QA] Negoci efímer",
-            "tax_id": "B11111111",
-            "contact_email": "qa+run9-negoci@km0lab.com",
+            "tax_id": "B11111119",
+            "contact_email": "qa+run9-b@km0lab.com",
             "postal_code": QA_POSTAL_CODE,
         },
+        headers=b,
     )
+    assert r.status_code == 200, r.text
 
 
 async def test_purge_dry_run_changes_nothing(client, qa):

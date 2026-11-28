@@ -346,30 +346,61 @@ async def test_business_public_signup_and_otp(
         )
     ).json()["public_code"]
 
+    owner = await _signup(client, capture_otp, "forn@test.cat", postal_code=cp)
     r = await client.post(
         "/api/v1/shops/public-signup",
         json={
             "name": "Forn Nou",
-            "tax_id": "B12345678",
+            "tax_id": "B12345674",
             "categories": [],
             "contact_email": "forn@test.cat",
             "postal_code": cp,
             "invite_code": code,
         },
+        headers=_auth(owner["access_token"]),
     )
     assert r.status_code == 200, r.text
-    assert r.json()["needs_otp"] is True
-    assert r.json()["status"] == "pending"
+    assert r.json()["status"] == "review"
+    shop_id = r.json()["shop_id"]
 
-    merchant = await _signup(
-        client, capture_otp, "forn@test.cat", postal_code=cp
+    # Held for validation: logging in again gives no shop and pays nobody.
+    again = await _signup(client, capture_otp, "forn@test.cat", postal_code=cp)
+    assert "merchant" not in again["user"]["roles"]
+    assert again["user"]["shop_request"]["status"] == "review"
+    r = await client.get(
+        "/api/v1/invites/me/summary", headers=_auth(inviter["access_token"])
     )
-    assert "merchant" in merchant["user"]["roles"]
+    assert r.json()["businesses_registered"] == 0
+    assert r.json()["points_earned"] == 0
+
+    admin = User(
+        email="biz-admin@test.cat",
+        slug="biz-admin",
+        postal_code=cp,
+        points=0,
+        **flags_from_roles(["admin", "resident"]),
+    )
+    db_session.add(admin)
+    await db_session.commit()
+    admin_token = create_access_token(
+        admin.id, roles=["admin", "resident"], town_id=town.id, shop_id=None
+    )
+    r = await client.post(
+        f"/api/v1/shops/{shop_id}/approve", headers=_auth(admin_token)
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "active" and r.json()["has_qr"] is True
+
+    # Approved: the inviter is paid now, and the shop is its owner's.
     r = await client.get(
         "/api/v1/invites/me/summary", headers=_auth(inviter["access_token"])
     )
     assert r.json()["businesses_registered"] == 1
     assert r.json()["points_earned"] == 500
+    merchant = await _signup(client, capture_otp, "forn@test.cat", postal_code=cp)
+    assert "merchant" in merchant["user"]["roles"]
+    assert merchant["user"]["shop_id"] == shop_id
+    assert merchant["user"]["shop_request"] is None
 
 
 async def test_resident_not_merchant_activates_own_shop(
@@ -394,7 +425,7 @@ async def test_resident_not_merchant_activates_own_shop(
         "/api/v1/shops/public-signup",
         json={
             "name": "Bar Resident",
-            "tax_id": "B87654321",
+            "tax_id": "B87654323",
             "contact_email": "resident-biz@test.cat",
             "postal_code": cp,
             "invite_code": code,
@@ -402,12 +433,12 @@ async def test_resident_not_merchant_activates_own_shop(
         headers=_auth(resident["access_token"]),
     )
     assert r.status_code == 200, r.text
-    assert r.json()["needs_otp"] is False
-    assert r.json()["status"] == "active"
+    # Having a session with that email no longer switches the shop on.
+    assert r.json()["status"] == "review"
     r = await client.get(
         "/api/v1/invites/me/summary", headers=_auth(inviter["access_token"])
     )
-    assert r.json()["businesses_registered"] == 1
+    assert r.json()["businesses_registered"] == 0
 
 
 async def test_already_merchant_not_eligible(client, capture_otp, db_session):

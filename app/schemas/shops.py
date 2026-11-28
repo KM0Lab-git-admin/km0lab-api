@@ -123,3 +123,21 @@ class QrOut(BaseModel):
     visit_points: int
     total_scans: int = 0
     points_awarded: int = 0
+
+
+class ShopRejectIn(BaseModel):
+    # Written by the administrator; it goes to the shop as it is.
+    reason: str = Field(min_length=3, max_length=500)
+
+
+class ShopReviewOut(BaseModel):
+    """What the machine checked on a shop's request to join."""
+
+    status: str
+    tax_id_valid: bool
+    postal_code_in_town: bool
+    email_verified: bool
+    same_tax_id: list[str] = []
+    similar_names: list[str] = []
+    invited_by: str | None = None
+    invite_points: int = 0

@@ -12,6 +12,7 @@ from app.schemas import UpdateUserIn, UserOut
 from app.services.slugs import allocate_user_slug
 from app.services.capacity import accept_terms
 from app.services.residency import move_resident
+from app.services.shop_review import user_out
 from app.services.towns import get_postal_code
 from app.utils.slug import slugify
 
@@ -19,8 +20,11 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 
 @router.get("/me", response_model=UserOut)
-async def get_me(user: User = Depends(get_current_user)):
-    return UserOut.model_validate(user)
+async def get_me(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await user_out(db, user)
 
 
 @router.patch("/me", response_model=UserOut)

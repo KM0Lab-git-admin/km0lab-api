@@ -44,7 +44,7 @@ from app.roles import (
     IncompatibleRolesError,
     flags_from_roles,
 )
-from app.schemas import AuthOut, MessageOut, RequestOtpIn, UserOut, VerifyOtpIn
+from app.schemas import AuthOut, MessageOut, RequestOtpIn, VerifyOtpIn
 from app.security import create_access_token, hash_otp, verify_otp
 from app.services.action_grants import grant_signup_points
 from app.services.capacity import (
@@ -60,6 +60,7 @@ from app.services.invitations import (
     convert_person_signup,
     record_event,
 )
+from app.services.shop_review import user_out
 from app.services.slugs import allocate_user_slug
 from app.services.towns import (
     assign_user_to_town,
@@ -201,7 +202,7 @@ async def _auth_out(
             town_id=user.town_id,
             shop_id=user.shop_id,
         ),
-        user=UserOut.model_validate(user),
+        user=await user_out(db, user),
         points_awarded=points_awarded,
         points_award_message=points_award_message,
     )

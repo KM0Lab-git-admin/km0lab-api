@@ -29,7 +29,7 @@ from app.db import SessionLocal, engine
 from app.demo import DEMO_CODE
 from app.main import app
 from app.models import PointsTransaction, QrScan, Redemption, Shop, User
-from app.qa import QA_POSTAL_CODE, QA_RESIDENT_EMAIL
+from app.qa import QA_ADMIN_EMAIL, QA_POSTAL_CODE, QA_RESIDENT_EMAIL
 from app.ratelimit import limiter
 from app.services.qa_purge import purge_qa_territory
 from app.services.qa_territory import (
@@ -143,18 +143,28 @@ async def main() -> None:
         flink = await c.get(f"{API}/invites/me/link", params={"kind": "person"}, headers=fixture)
         await _login(c, "qa+check-c@km0lab.com", invite_code=flink.json()["public_code"])
 
+        applicant, _ = await _login(c, "qa+check-negoci@km0lab.com")
         r = await c.post(
             f"{API}/shops/public-signup",
             json={
                 "name": "[QA] Negoci de comprovació",
-                "tax_id": "B22222222",
+                "tax_id": "B22222228",
                 "contact_email": "qa+check-negoci@km0lab.com",
                 "postal_code": QA_POSTAL_CODE,
             },
+            headers=applicant,
         )
-        _check(r.status_code == 200, "business signup is accepted")
+        _check(
+            r.status_code == 200 and r.json()["status"] == "review",
+            "business signup is held for validation",
+        )
+        _, waiting = await _login(c, "qa+check-negoci@km0lab.com")
+        _check("merchant" not in waiting["roles"], "no shop before it is approved")
+        qa_admin, _ = await _login(c, QA_ADMIN_EMAIL)
+        r = await c.post(f"{API}/shops/{r.json()['shop_id']}/approve", headers=qa_admin)
+        _check(r.status_code == 200, "the administrator approves it")
         _, owner = await _login(c, "qa+check-negoci@km0lab.com")
-        _check("merchant" in owner["roles"], "business owner becomes merchant on login")
+        _check("merchant" in owner["roles"], "business owner is merchant once approved")
 
         print(f"3. Concurrency ({PARALLEL} at once)")
         racer, racer_user = await _login(c, "qa+check-race@km0lab.com")

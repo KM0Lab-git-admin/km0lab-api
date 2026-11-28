@@ -26,6 +26,12 @@ from app.catalog.email_shop_invite import (
     render_shop_invite_text,
     shop_invite_subject,
 )
+from app.catalog.email_shop_review import (
+    REVIEW_COPY,
+    render_review_html,
+    render_review_text,
+    review_email_subject,
+)
 from app.config import get_settings
 
 logger = logging.getLogger("km0lab-api.email")
@@ -202,4 +208,45 @@ async def send_shop_invite_email(
         logger.info("Aviso de alta de comercio enviado (lang=%s)", resolved)
     else:
         logger.warning("[DEV] Aviso de alta de comercio sin enviar (email no configurado)")
+    return sent
+
+
+async def send_shop_review_email(
+    kind: str,
+    to: str,
+    *,
+    shop_name: str,
+    town: str,
+    reason: str | None = None,
+    lang: str | None = None,
+) -> bool:
+    """One of the emails of a shop's request to join (``email_shop_review``).
+
+    Returns whether an email went out. The ones with a button to the panel
+    (approved, and the notice to the administrator) are not sent without
+    ``BACKOFFICE_URL``, like the invitation.
+    """
+    resolved = normalize_invite_lang(lang)
+    panel_url = (get_settings().backoffice_url or "").strip()
+    needs_panel = "button" in REVIEW_COPY[resolved][kind]
+    if needs_panel and not panel_url:
+        logger.warning("Correo de alta (%s) no enviado: falta BACKOFFICE_URL", kind)
+        return False
+    parts = dict(
+        shop_name=shop_name,
+        town=town,
+        reason=reason,
+        panel_url=panel_url or None,
+        lang=resolved,
+    )
+    sent = await _deliver(
+        to,
+        review_email_subject(kind, resolved, shop_name=shop_name),
+        render_review_text(kind, **parts),
+        render_review_html(kind, **parts),
+    )
+    if sent:
+        logger.info("Correo de alta (%s) enviado (lang=%s)", kind, resolved)
+    else:
+        logger.warning("[DEV] Correo de alta (%s) sin enviar (email no configurado)", kind)
     return sent
