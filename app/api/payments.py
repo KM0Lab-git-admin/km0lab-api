@@ -12,6 +12,7 @@ from app.deps import require_admin
 from app.models import Redemption, Reward, Shop, ShopPayment, User
 from app.schemas import ShopDebtOut, ShopPaymentCreate, ShopPaymentOut
 from app.services.payments import voucher_amount
+from app.services.voucher_guard import self_validated_pending
 
 router = APIRouter(prefix="/payments", tags=["payments"])
 
@@ -72,6 +73,7 @@ async def list_debts(
 
     shop_ids = set(pending_count) | set(paid)
     names = await _shop_names(db, shop_ids)
+    own = await self_validated_pending(db, shop_ids)
     debts = [
         ShopDebtOut(
             shop_id=shop_id,
@@ -79,6 +81,7 @@ async def list_debts(
             pending_count=pending_count.get(shop_id, 0),
             pending_amount=float(pending_amount.get(shop_id, Decimal("0"))),
             paid_total=float(paid.get(shop_id, Decimal("0"))),
+            self_validated_count=own.get(shop_id, 0),
         )
         for shop_id in shop_ids
     ]

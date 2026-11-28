@@ -654,7 +654,7 @@ class PointsTransaction(Base):
     )
     type: Mapped[str] = mapped_column(
         String(30)
-    )  # welcome | birthday | action | scan | redemption | adjustment | invite_person | invite_business
+    )  # welcome | birthday | action | scan | redemption | refund | adjustment | invite_person | invite_business
     points: Mapped[int] = mapped_column(Integer)  # +/-
     ref_id: Mapped[str | None] = mapped_column(String(32), default=None, index=True)
     description: Mapped[str | None] = mapped_column(String(255), default=None)
@@ -708,6 +708,17 @@ class Redemption(Base):
         String(32), ForeignKey("shops.id"), default=None
     )
     used_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+    # Account that validated the voucher: the merchant, or an admin acting
+    # as the shop. Null until it is used.
+    validated_by_user_id: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    # The voucher belonged to the account that validated it, or to the
+    # account that owns the shop. Still valid; settlement reads this later.
+    self_validated: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Set at redemption from Town.expiry_months. Null = this voucher does
+    # not expire (the town has no term, or the voucher predates the column).
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     amount_applied: Mapped[str | None] = mapped_column(String(80), default=None)
     # Settlement to the shop (used vouchers only); null = pending payment.
     payment_id: Mapped[str | None] = mapped_column(
@@ -748,6 +759,25 @@ class ShopPayment(Base):
     is_fake: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
+    )
+
+
+class VoucherAttempt(Base):
+    """One try at validating a voucher by its code, hit or miss.
+
+    Misses are what the hourly cap counts. They live in the database so a
+    restart does not hand the guesses back, and so they can be reviewed.
+    """
+
+    __tablename__ = "voucher_attempts"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    shop_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("shops.id", ondelete="CASCADE"), index=True
+    )
+    success: Mapped[bool] = mapped_column(Boolean, default=False)
+    attempted_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), index=True
     )
 
 

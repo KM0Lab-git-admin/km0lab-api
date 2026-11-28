@@ -20,6 +20,13 @@ from app.schemas import (
 from app.services.points import apply_points, lock_user_points
 from app.services.towns import assign_user_to_town
 from app.services.voucher_codes import allocate_voucher_code
+from app.services.voucher_guard import (
+    expiry_for,
+    is_expired,
+    is_self_validated,
+    miss_refusal,
+    note_attempt,
+)
 
 router = APIRouter(prefix="/redemptions", tags=["redemptions"])
 
@@ -48,11 +55,28 @@ async def _load(db: AsyncSession, redemption_id: str) -> Redemption | None:
     ).scalars().first()
 
 
+async def _lock_voucher(
+    db: AsyncSession, *, code: str | None = None, redemption_id: str | None = None
+) -> Redemption | None:
+    stmt = select(Redemption).where(Redemption.flow == "voucher_qr")
+    if code is not None:
+        stmt = stmt.where(Redemption.code == code)
+    else:
+        stmt = stmt.where(Redemption.id == redemption_id)
+    return (await db.execute(stmt.with_for_update())).scalars().first()
+
+
+def _hidden() -> HTTPException:
+    """Same answer as a code that does not exist. No hint that it is real."""
+    return HTTPException(status.HTTP_404_NOT_FOUND, detail="Voucher not found")
+
+
 async def _mark_used(
     db: AsyncSession,
     redemption: Redemption,
     *,
-    shop_id: str | None,
+    shop: Shop,
+    actor: User,
     amount_applied: str | None,
 ) -> None:
     redemption.status = "used"
@@ -60,12 +84,38 @@ async def _mark_used(
     applied = amount_applied if amount_applied is not None else redemption.amount
     redemption.amount_applied = applied
     if not redemption.shop_id:
-        redemption.shop_id = shop_id
+        redemption.shop_id = shop.id
+    redemption.validated_by_user_id = actor.id
+    redemption.self_validated = await is_self_validated(db, redemption, shop, actor)
     db.add(
         RedemptionEvent(
             redemption_id=redemption.id, status="used", note="Voucher used"
         )
     )
+
+
+async def _refund(db: AsyncSession, redemption: Redemption) -> None:
+    """Give the points and the unit back. Same transaction as the cancel."""
+    resident = await db.get(User, redemption.user_id)
+    if resident is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="Cannot cancel")
+    await lock_user_points(db, resident)
+    await apply_points(
+        db,
+        user=resident,
+        points=redemption.points_spent,
+        type="refund",
+        town_id=redemption.town_id,
+        ref_id=redemption.id,
+        description="Cancelled redemption",
+    )
+    reward = await db.get(
+        Reward, redemption.reward_id, with_for_update=True, populate_existing=True
+    )
+    if reward is not None and reward.stock is not None:
+        reward.stock += 1
+        if reward.stock > 0 and reward.status == "sold_out":
+            reward.status = "active"
 
 
 @router.post("", response_model=RedemptionOut, status_code=status.HTTP_201_CREATED)
@@ -94,6 +144,7 @@ async def create_redemption(
 
     flow = derive_flow(reward.type)
     code = await allocate_voucher_code(db) if flow == "voucher_qr" else None
+    expires_at = await expiry_for(db, reward.town_id) if flow == "voucher_qr" else None
     redemption = Redemption(
         town_id=reward.town_id,
         user_id=user.id,
@@ -102,6 +153,7 @@ async def create_redemption(
         points_spent=reward.points_required,
         status=initial_status(flow),
         code=code,
+        expires_at=expires_at,
         amount=payload.amount,
         shop_id=payload.shop_id,
         is_fake=user.is_fake,
@@ -177,47 +229,43 @@ async def list_redemptions(
     return [_to_out(r) for r in rows]
 
 
+def _refuse_unusable(redemption: Redemption) -> None:
+    if is_expired(redemption):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="expired")
+    if redemption.status == "used":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="already_used")
+    if redemption.status == "cancelled":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="cancelled")
+    if redemption.status != "pending_use":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Not pending use")
+
+
 @router.post("/validate", response_model=RedemptionOut)
 async def validate_voucher(
     payload: RedemptionValidateIn,
     shop: Shop = Depends(resolve_acting_shop),
+    actor: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Merchant validates a voucher by its 5-digit code (lookup + use)."""
-    redemption = (
-        await db.execute(
-            select(Redemption)
-            .options(selectinload(Redemption.events))
-            .where(
-                Redemption.code == payload.code,
-                Redemption.flow == "voucher_qr",
-                Redemption.is_fake.is_(shop.is_fake),
-            )
-        )
-    ).scalars().first()
-    if not redemption:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Voucher not found")
+    blocked = await miss_refusal(db, shop.id)
+    if blocked is not None:
+        return blocked
+    redemption = await _lock_voucher(db, code=payload.code)
+    if (
+        not redemption
+        or redemption.is_fake != shop.is_fake
+        or redemption.town_id != shop.town_id
+    ):
+        await note_attempt(db, shop.id, success=False)
+        raise _hidden()
     if redemption.shop_id and redemption.shop_id != shop.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Out of shop scope")
-    if redemption.status == "used":
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, detail="already_used"
-        )
-    if redemption.status == "cancelled":
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, detail="cancelled"
-        )
-    if redemption.status != "pending_use":
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, detail="Not pending use"
-        )
+    _refuse_unusable(redemption)
     await _mark_used(
-        db,
-        redemption,
-        shop_id=shop.id,
-        amount_applied=payload.amount_applied,
+        db, redemption, shop=shop, actor=actor, amount_applied=payload.amount_applied
     )
-    await db.commit()
+    await note_attempt(db, shop.id, success=True)
     redemption = await _load(db, redemption.id)
     return _to_out(redemption)  # type: ignore[arg-type]
 
@@ -229,9 +277,20 @@ async def update_status(
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    redemption = await _load(db, redemption_id)
+    redemption = await db.get(
+        Redemption, redemption_id, with_for_update=True, populate_existing=True
+    )
     if not redemption or redemption.town_id != user.town_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Redemption not found")
+    if payload.status == "cancelled":
+        if (
+            redemption.status in {"cancelled", "used"}
+            or redemption.payment_id is not None
+        ):
+            raise HTTPException(status.HTTP_409_CONFLICT, detail="Cannot cancel")
+        await _refund(db, redemption)
+    elif redemption.status == "cancelled":
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="Cannot cancel")
     redemption.status = payload.status
     if payload.status == "delivered":
         redemption.delivered_at = datetime.now(timezone.utc)
@@ -254,20 +313,21 @@ async def use_voucher(
     redemption_id: str,
     payload: RedemptionUseIn,
     shop: Shop = Depends(resolve_acting_shop),
+    actor: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    redemption = await _load(db, redemption_id)
-    if not redemption or redemption.flow != "voucher_qr":
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Voucher not found")
+    redemption = await _lock_voucher(db, redemption_id=redemption_id)
+    if (
+        not redemption
+        or redemption.is_fake != shop.is_fake
+        or redemption.town_id != shop.town_id
+    ):
+        raise _hidden()
     if redemption.shop_id and redemption.shop_id != shop.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Out of shop scope")
-    if redemption.status != "pending_use":
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Not pending use")
+    _refuse_unusable(redemption)
     await _mark_used(
-        db,
-        redemption,
-        shop_id=shop.id,
-        amount_applied=payload.amount_applied,
+        db, redemption, shop=shop, actor=actor, amount_applied=payload.amount_applied
     )
     await db.commit()
     redemption = await _load(db, redemption_id)

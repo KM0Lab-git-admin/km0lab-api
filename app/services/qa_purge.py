@@ -36,6 +36,7 @@ from app.models import (
     RewardShop,
     Shop,
     ShopMedia,
+    VoucherAttempt,
     ShopPayment,
     Town,
     TownMedia,
@@ -406,6 +407,9 @@ async def purge_qa_territory(
         )
         await db.execute(
             delete(ShopMedia).where(ShopMedia.shop_id.in_(shop_ids))
+        )
+        await db.execute(
+            delete(VoucherAttempt).where(VoucherAttempt.shop_id.in_(shop_ids))
         )
         await db.execute(delete(Shop).where(Shop.id.in_(shop_ids)))
 

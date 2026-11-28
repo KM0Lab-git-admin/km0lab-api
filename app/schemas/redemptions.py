@@ -23,6 +23,9 @@ class RedemptionOut(BaseModel):
     amount: str | None
     shop_id: str | None
     used_at: datetime | None
+    validated_by_user_id: str | None = None
+    self_validated: bool = False
+    expires_at: datetime | None = None
     amount_applied: str | None
     payment_id: str | None = None
     delivered_at: datetime | None

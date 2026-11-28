@@ -13,6 +13,8 @@ class ShopDebtOut(BaseModel):
     pending_count: int
     pending_amount: float
     paid_total: float
+    # Used, unpaid vouchers the shop (or its owner) validated for itself.
+    self_validated_count: int = 0
 
 
 class ShopPaymentOut(BaseModel):

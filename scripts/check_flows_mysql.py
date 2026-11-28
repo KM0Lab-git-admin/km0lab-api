@@ -29,7 +29,12 @@ from app.db import SessionLocal, engine
 from app.demo import DEMO_CODE
 from app.main import app
 from app.models import PointsTransaction, QrScan, Redemption, Shop, User
-from app.qa import QA_ADMIN_EMAIL, QA_POSTAL_CODE, QA_RESIDENT_EMAIL
+from app.qa import (
+    QA_ADMIN_EMAIL,
+    QA_MERCHANT_EMAIL,
+    QA_POSTAL_CODE,
+    QA_RESIDENT_EMAIL,
+)
 from app.ratelimit import limiter
 from app.services.qa_purge import purge_qa_territory
 from app.services.qa_territory import (
@@ -187,6 +192,29 @@ async def main() -> None:
         _check(codes == [201, 201] + [400] * (PARALLEL - 2), f"no overspend and no server error {codes}")
         balance, ledger = await _balance_and_ledger(racer_user["id"])
         _check(balance == ledger == 60, f"balance equals ledger ({balance} / {ledger})")
+
+        held = await c.post(
+            f"{API}/redemptions",
+            json={"reward_id": _stable_id("reward-voucher")},
+            headers=racer,
+        )
+        _check(held.status_code == 201, "a voucher is ready to validate twice")
+        merchant, _ = await _login(c, QA_MERCHANT_EMAIL)
+        races = await asyncio.gather(
+            *[
+                c.post(
+                    f"{API}/redemptions/validate",
+                    json={"code": held.json()["code"]},
+                    headers=merchant,
+                )
+                for _ in range(PARALLEL)
+            ]
+        )
+        codes = sorted(x.status_code for x in races)
+        _check(
+            codes == [200] + [400] * (PARALLEL - 1),
+            f"one validation wins, the other is already used {codes}",
+        )
 
     print("4. Purge")
     async with SessionLocal() as db:
