@@ -113,6 +113,30 @@ Con varias poblaciones y sin ninguna pista contesta 422 `locality_required`:
 no se adivina. `GET /towns/me` devuelve `localities` para que el backoffice
 las ofrezca.
 
+## Alta de un comercio
+
+Un comercio entra por dos caminos (`app/services/shop_review.py`):
+
+- **Lo da de alta el administrador** (`POST /shops`): nace `pending`, con
+  su QR, y pasa a `active` cuando su dueño entra con el correo de contacto.
+- **Lo pide el propio comercio** (`POST /shops/public-signup`, con la sesión
+  de quien lo pide): nace `review`, sin QR, y **no existe en público** hasta
+  que el administrador de su municipio lo aprueba (`POST /shops/{id}/approve`)
+  o lo rechaza con un motivo (`POST /shops/{id}/reject`, queda `rejected`).
+
+Reglas:
+
+- Nada activa un comercio en `review` salvo aprobarlo: ni entrar con su
+  correo ni el `PATCH` del administrador (409 `shop_in_review`).
+- Lo que la máquina sabe comprobar (dígito de control del NIF, NIE o CIF,
+  código postal, duplicados) se rechaza al enviar; lo demás lo ve el
+  administrador en `GET /shops/{id}/review`.
+- A quien invitó al comercio se le paga **al aprobar**, no antes.
+- El motivo del rechazo viaja en el correo y **no se guarda**. Las
+  rechazadas se borran a los 30 días con `scripts/purge_rejected_shops.py`
+  (sin `--apply` solo enseña); una rechazada no se edita.
+- `/users/me` y el login devuelven `shop_request` (`review` o `rejected`).
+
 ## Catálogo de premios
 
 El catálogo es **uno y el mismo para todos los municipios**. Se edita en un
