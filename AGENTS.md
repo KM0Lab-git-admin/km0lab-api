@@ -171,6 +171,31 @@ Lo que se guarda aparte es **por dónde entra** la persona: una fila de
   correo** (403 `use_email`).
 - **No se guarda ninguna credencial** de Google, Facebook ni Apple.
 
+## Sesión: se entra una vez
+
+Quien usa la App o el panel **no vuelve a identificarse**
+(`app/services/sessions.py`).
+
+- La credencial vale `SESSION_IDLE_DAYS` (365; 30 para un administrador)
+  **desde la última renovación**. Las apps la renuevan solas al abrirse
+  (`POST /auth/renew`). Solo vuelve a entrar quien pasa ese tiempo sin
+  usarlas.
+- **Nada de esto puede echar a nadie por mala conexión.** Renovar no gasta
+  la credencial anterior; si la respuesta se pierde, la que tiene sigue
+  valiendo. No añadas un paso que la invalide al renovar.
+- **Cerrar sesiones desde el servidor** es por cuenta entera: cada cuenta
+  tiene un contador (`users.session_epoch`) que viaja en la credencial;
+  sumarle uno deja sin validez todas las anteriores. Lo hacen
+  `POST /auth/logout-all` (la propia persona) y
+  `python -m scripts.close_sessions --email …` (móvil perdido; sin
+  `--apply` solo enseña). No se puede cerrar un solo dispositivo.
+- **`JWT_SECRET` no se cambia nunca** cuando ya hay cuentas de verdad:
+  cambiarlo cierra la sesión de todo el mundo. Cada entorno tiene la suya.
+  Con el valor de ejemplo la API **no arranca** en producción y lo avisa
+  en el registro en UAT.
+- Una credencial emitida antes de existir el contador vale como 0: nadie
+  sale al publicar esto.
+
 ## Catálogo de premios
 
 El catálogo es **uno y el mismo para todos los municipios**. Se edita en un

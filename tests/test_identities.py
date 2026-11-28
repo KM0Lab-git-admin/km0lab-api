@@ -1,10 +1,7 @@
 """How each person gets in, and where each account came from
 (``app/services/identities.py``)."""
 
-from datetime import datetime, timedelta, timezone
-
 import pytest
-from jose import jwt
 from sqlalchemy import func, select
 
 from app.config import get_settings
@@ -135,24 +132,6 @@ async def test_fixed_code_accounts_count_as_email_too(client, db_session, monkey
         .where(UserIdentity.user_id.notin_(select(User.id)))
     )
     assert orphans == 0
-
-
-async def test_the_session_lasts_ninety_days(
-    client, capture_otp, db_session, monkeypatch
-):
-    await malgrat(db_session)
-    await db_session.commit()
-    settings = get_settings()
-    # What the code ships with. A ``JWT_EXPIRE_MINUTES`` left in the
-    # environment (the old .env said 30 days) still wins over it.
-    default = type(settings).model_fields["jwt_expire_minutes"].default
-    assert default == 60 * 24 * 90
-    monkeypatch.setattr(settings, "jwt_expire_minutes", default)
-
-    token = (await _enter(client, capture_otp, "marta@test.cat"))["access_token"]
-    claims = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
-    lasts = datetime.fromtimestamp(claims["exp"], timezone.utc) - datetime.now(timezone.utc)
-    assert timedelta(days=89, hours=23) < lasts <= timedelta(days=90)
 
 
 # ── What the administrator sees ───────────────────────────────────────

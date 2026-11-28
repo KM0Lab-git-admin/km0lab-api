@@ -14,6 +14,7 @@ from app.roles import (
     primary_role,
 )
 from app.security import decode_access_token
+from app.services.sessions import is_closed
 from app.services.towns import load_user_with_town
 
 bearer = HTTPBearer(auto_error=True)
@@ -53,6 +54,10 @@ async def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found"
         )
+    if is_closed(user, payload):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Session closed"
+        )
     # Residents on Demo KM0 (CP 00000) must live on the is_fake partition.
     if sync_user_fake_partition(user):
         await db.commit()
@@ -75,7 +80,7 @@ async def get_optional_user(
     if not payload:
         return None
     user = await load_user_with_town(db, payload["sub"])
-    if not user:
+    if not user or is_closed(user, payload):
         return None
     if sync_user_fake_partition(user):
         await db.commit()

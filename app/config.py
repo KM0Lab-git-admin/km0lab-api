@@ -23,8 +23,12 @@ class Settings(BaseSettings):
     # JWT
     jwt_secret: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
-    # Cuánto dura la sesión. Sin renovación: al caducar se vuelve a entrar.
-    jwt_expire_minutes: int = 60 * 24 * 90  # 90 días
+    # Sesión (app/services/sessions.py): días que vale desde la última vez
+    # que se renovó. Las apps la renuevan solas al abrirse, así que quien
+    # las usa no vuelve a identificarse; este plazo es para quien deja de
+    # usarlas. Más corto para los administradores.
+    session_idle_days: int = 365
+    admin_session_idle_days: int = 30
 
     # OTP
     otp_ttl_minutes: int = 10

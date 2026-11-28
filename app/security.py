@@ -8,7 +8,7 @@ from typing import Iterable
 from jose import JWTError, jwt
 
 from app.config import get_settings
-from app.roles import normalize_roles, primary_role
+from app.roles import ROLE_ADMIN, normalize_roles, primary_role
 
 settings = get_settings()
 
@@ -20,6 +20,7 @@ def create_access_token(
     role: str | None = None,
     town_id: str | None = None,
     shop_id: str | None = None,
+    epoch: int = 0,
 ) -> str:
     """Issue JWT. Prefer `roles`; legacy single `role=` still accepted."""
     if roles is not None:
@@ -29,6 +30,13 @@ def create_access_token(
     else:
         role_list = normalize_roles(["resident"])
 
+    # Lasts this long from now; the apps renew it when they open
+    # (app/services/sessions.py). An administrator's is shorter.
+    days = (
+        settings.admin_session_idle_days
+        if ROLE_ADMIN in role_list
+        else settings.session_idle_days
+    )
     now = datetime.now(timezone.utc)
     payload = {
         "sub": user_id,
@@ -37,8 +45,11 @@ def create_access_token(
         "role": primary_role(role_list),
         "town_id": town_id,
         "shop_id": shop_id,
+        # The account's counter when this was issued: closing every
+        # session of the account makes it stop matching.
+        "ep": int(epoch or 0),
         "iat": now,
-        "exp": now + timedelta(minutes=settings.jwt_expire_minutes),
+        "exp": now + timedelta(days=days),
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 

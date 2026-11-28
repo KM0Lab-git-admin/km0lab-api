@@ -30,6 +30,7 @@ from app.api import demo as demo_sheet
 from app.config import get_settings
 from app.db import Base, engine
 from app.ratelimit import limiter, rate_limit_exceeded_handler
+from app.services.sessions import check_signing_key
 from app.version import API_VERSION, AppVersionMiddleware, min_app_version
 
 logging.basicConfig(level=logging.INFO)
@@ -38,6 +39,7 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    check_signing_key(settings)
     if settings.environment == "development":
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)

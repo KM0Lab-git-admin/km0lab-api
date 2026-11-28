@@ -233,6 +233,11 @@ class User(Base):
     # consent). None on accounts older than the terms.
     terms_accepted_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     terms_version: Mapped[str | None] = mapped_column(String(16), default=None)
+    # Adding one closes every session of the account, on every device
+    # (app/services/sessions.py).
+    session_epoch: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
     is_fake: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()

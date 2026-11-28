@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db import get_db
-from app.deps import get_optional_user
+from app.deps import get_current_user, get_optional_user
 from app.demo import (
     DEMO_CODE,
     demo_enabled,
@@ -90,6 +90,7 @@ from app.services.social import (
     read_link_token,
     verify_credential,
 )
+from app.services.sessions import close_all_sessions
 from app.services.shop_review import user_out
 from app.services.slugs import allocate_user_slug
 from app.services.towns import (
@@ -290,6 +291,7 @@ async def _auth_out(
             roles=user.roles,
             town_id=user.town_id,
             shop_id=user.shop_id,
+            epoch=user.session_epoch,
         ),
         user=await user_out(db, user),
         points_awarded=points_awarded,
@@ -835,3 +837,33 @@ async def social_login(
         door_email=profile.email,
         account=owner,
     )
+
+
+# ── Sessions ──────────────────────────────────────────────────────────
+
+
+@router.post("/renew", response_model=AuthOut)
+async def renew_session(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """A fresh session token for whoever holds a valid one.
+
+    The apps call this quietly when they open, so a person who uses the app
+    is never asked to sign in again (``app/services/sessions.py``). The new
+    token also carries the account as it is now (roles, municipality, shop).
+    The one sent stays valid: if this answer is lost on a bad connection,
+    nothing is lost.
+    """
+    return await _auth_out(db, user)
+
+
+@router.post("/logout-all", response_model=MessageOut)
+async def logout_everywhere(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Close my session on all my devices, this one included."""
+    close_all_sessions(user)
+    await db.commit()
+    return MessageOut(message="S'ha tancat la sessió a tots els dispositius.")
