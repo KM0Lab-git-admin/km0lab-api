@@ -36,7 +36,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from scripts._target import TARGETS, point_at  # noqa: E402
+from scripts._target import TARGETS, guard_write, point_at  # noqa: E402
 
 
 def _print(town_name: str, report) -> None:
@@ -131,6 +131,8 @@ if __name__ == "__main__":
     which.add_argument("--all", action="store_true")
     parser.add_argument("--target", choices=TARGETS, default="local")
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--confirm", default=None)
     parsed = parser.parse_args()
     print(f"Database: {point_at(parsed.target)}")
+    guard_write(parsed.target, apply=parsed.apply, confirm=parsed.confirm)
     raise SystemExit(asyncio.run(main(parsed)))

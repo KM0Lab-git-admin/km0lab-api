@@ -18,7 +18,7 @@ import argparse
 import asyncio
 from pathlib import Path
 
-from scripts._target import TARGETS, point_at
+from scripts._target import TARGETS, guard_write, point_at
 
 ART_DIR = Path(__file__).resolve().parent / "seed_media" / "towns"
 CONTENT_TYPES = {".webp": "image/webp", ".png": "image/png", ".jpg": "image/jpeg"}
@@ -95,6 +95,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", choices=TARGETS, default="local")
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--confirm", default=None)
     parsed = parser.parse_args()
     print(f"Database: {point_at(parsed.target)}")
+    guard_write(parsed.target, apply=parsed.apply, confirm=parsed.confirm)
     asyncio.run(main(parsed.apply))

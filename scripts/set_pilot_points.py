@@ -39,7 +39,7 @@ import argparse
 import asyncio
 import sys
 
-from scripts._target import TARGETS, point_at
+from scripts._target import TARGETS, guard_write, point_at
 
 KIND_LABEL = {
     "municipality": "municipality",
@@ -136,8 +136,10 @@ if __name__ == "__main__":
     parser.add_argument("--town", default=None)
     parser.add_argument("--target", choices=TARGETS, default="local")
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--confirm", default=None)
     parsed = parser.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     print(f"Database: {point_at(parsed.target)}")
+    guard_write(parsed.target, apply=parsed.apply, confirm=parsed.confirm)
     raise SystemExit(asyncio.run(main(parsed)))
