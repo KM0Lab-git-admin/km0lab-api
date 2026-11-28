@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, model_validator
 
 
 class RequestOtpIn(BaseModel):
@@ -26,7 +26,9 @@ class VerifyOtpIn(BaseModel):
 
 class SocialLoginIn(BaseModel):
     # What the network handed the app: verified here, never stored.
-    credential: str = Field(min_length=10, max_length=8192)
+    # Google's account picker sends ``code`` instead (exchanged server-side).
+    credential: str | None = Field(default=None, max_length=8192)
+    code: str | None = Field(default=None, max_length=2048)
     invite_code: str | None = Field(default=None, max_length=32)
     postal_code: str | None = Field(default=None, max_length=10)
     terms_version: str | None = Field(default=None, max_length=16)
@@ -36,6 +38,16 @@ class SocialLoginIn(BaseModel):
     # Apple gives the name only the first time, and to the app.
     first_name: str | None = Field(default=None, max_length=80)
     last_name: str | None = Field(default=None, max_length=120)
+
+    @model_validator(mode="after")
+    def credential_or_code(self):
+        self.credential = (self.credential or "").strip() or None
+        self.code = (self.code or "").strip() or None
+        if self.code:
+            return self
+        if not self.credential or len(self.credential) < 10:
+            raise ValueError("credential or code")
+        return self
 
 
 class SocialNonceOut(BaseModel):

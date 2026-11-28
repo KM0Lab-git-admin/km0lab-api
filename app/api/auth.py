@@ -77,6 +77,7 @@ from app.services.invitations import (
 )
 from app.services.identities import (
     PROVIDER_EMAIL,
+    PROVIDER_GOOGLE,
     SOCIAL_PROVIDERS,
     IdentityTaken,
     ensure_identity,
@@ -88,10 +89,12 @@ from app.services.social import (
     create_link_token,
     create_nonce,
     enabled_providers,
+    exchange_google_code,
     is_enabled,
     read_link_token,
     read_nonce_token,
     verify_credential,
+    verify_google,
 )
 from app.services.sessions import close_all_sessions
 from app.services.shop_review import user_out
@@ -791,12 +794,19 @@ async def social_login(
     """
     provider = _provider_on(provider)
     try:
-        nonce = None
-        if payload.nonce_token:
-            nonce = read_nonce_token(payload.nonce_token)
-            if nonce is None:
-                raise SocialRefused("the nonce of this sign-in is not valid")
-        profile = await verify_credential(provider, payload.credential, nonce)
+        # The popup's code is exchanged here. The nonce does not apply:
+        # Google gives the identity token to this server, not to the app.
+        if provider == PROVIDER_GOOGLE and payload.code:
+            profile = await verify_google(await exchange_google_code(payload.code))
+        else:
+            if not payload.credential:
+                raise SocialRefused("missing credential")
+            nonce = None
+            if payload.nonce_token:
+                nonce = read_nonce_token(payload.nonce_token)
+                if nonce is None:
+                    raise SocialRefused("the nonce of this sign-in is not valid")
+            profile = await verify_credential(provider, payload.credential, nonce)
     except SocialRefused:
         raise _otp_error(
             status.HTTP_401_UNAUTHORIZED,

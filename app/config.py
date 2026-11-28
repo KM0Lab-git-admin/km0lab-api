@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     # aquí su identificador de cliente, que es público. Vacío = apagada.
     auth_providers: str = ""
     google_client_id: str = ""
+    # Secreto del cliente OAuth web. Solo en el servidor: con él se canjea
+    # el código de la ventana de elegir cuenta. Sin él, Google queda apagado.
+    google_client_secret: str = ""
     facebook_client_id: str = ""  # el identificador de la app en Meta
     # Secreto de la app de Meta: con él se pregunta a Facebook si una
     # credencial es válida y es para nuestra app. Solo en el entorno.

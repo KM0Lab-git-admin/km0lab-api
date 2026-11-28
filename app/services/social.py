@@ -74,6 +74,8 @@ def client_id(provider: str) -> str:
 # What a network needs besides its client id before it can be offered:
 # without it the button would be there and every attempt would fail.
 REQUIRED_SETTINGS: dict[str, tuple[str, ...]] = {
+    # Without the secret the popup's code cannot be exchanged.
+    PROVIDER_GOOGLE: ("google_client_secret",),
     PROVIDER_FACEBOOK: ("facebook_app_secret",),
 }
 
@@ -119,12 +121,65 @@ async def verify_credential(
 
 
 # ── Google ────────────────────────────────────────────────────────────
-# The "Sign in with Google" button hands the app an identity token; the
-# credential sent here is that token. Google always gives an email and
-# says whether it has verified it.
+# Two ways in, one check.
+#
+# - A button may hand the app an identity token (``credential``).
+# - The account picker (code model, popup) hands the app a code. This
+#   server exchanges it at Google, with the client secret and
+#   ``redirect_uri=postmessage`` (the popup has no redirect). The
+#   ``id_token`` in the answer is checked below. The nonce does not apply
+#   on that path: the token arrives from Google to this server.
+#
+# Google always gives an email and says whether it has verified it.
 
 GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs"
 GOOGLE_ISSUERS = ("accounts.google.com", "https://accounts.google.com")
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+# Tests swap this for a make-believe token endpoint.
+_google_transport: httpx.AsyncBaseTransport | None = None
+
+
+async def exchange_google_code(code: str) -> str:
+    """The identity token inside a popup code.
+
+    Google saying no is a refusal. Google not answering is raised as it
+    is ("try again", not "not valid").
+    """
+    settings = get_settings()
+    app_id = client_id(PROVIDER_GOOGLE)
+    secret = (settings.google_client_secret or "").strip()
+    if not app_id or not secret:
+        raise SocialRefused("google is not configured")
+    try:
+        async with httpx.AsyncClient(
+            timeout=10.0, transport=_google_transport
+        ) as client:
+            response = await client.post(
+                GOOGLE_TOKEN_URL,
+                data={
+                    "code": code,
+                    "client_id": app_id,
+                    "client_secret": secret,
+                    "redirect_uri": "postmessage",
+                    "grant_type": "authorization_code",
+                },
+            )
+    except httpx.HTTPError:
+        raise
+    if response.status_code >= 500:
+        response.raise_for_status()
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    if response.status_code >= 400 or not isinstance(body, dict):
+        logger.warning("Google refused the code: %s", response.status_code)
+        raise SocialRefused(f"google {response.status_code}")
+    id_token = body.get("id_token")
+    if not isinstance(id_token, str) or not id_token:
+        logger.warning("Google returned no id_token: %s", response.status_code)
+        raise SocialRefused("google returned no id_token")
+    return id_token
 
 
 async def verify_google(credential: str, nonce: str | None = None) -> SocialProfile:
