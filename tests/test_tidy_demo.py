@@ -167,3 +167,51 @@ async def test_apply_tidies_the_demo_and_a_second_pass_is_quiet(db_session):
 
     again = await tidy_demo(db_session, apply=True)
     assert again.changes == []
+
+
+async def test_apply_allocates_a_code_when_the_fixed_one_is_taken(db_session):
+    demo = await ensure_demo_town(db_session)
+    shop = await _shop(db_session, demo.id, "[DEMO] Fleca", fake=True)
+    merchant = await _person(
+        db_session, DEMO_MERCHANT_EMAIL, "00000", roles=["resident", "merchant"]
+    )
+    merchant.shop_id = shop.id
+    reward = Reward(
+        town_id=demo.id,
+        name="Pa",
+        type="product",
+        points_required=10,
+        status="active",
+        is_fake=True,
+    )
+    db_session.add(reward)
+    await db_session.flush()
+    holder = await _person(db_session, "ocupa@km0lab.com", "00000")
+    db_session.add(
+        Redemption(
+            town_id=demo.id,
+            user_id=holder.id,
+            reward_id=reward.id,
+            flow="voucher_qr",
+            points_spent=10,
+            status="used",
+            code="80000",
+            is_fake=True,
+        )
+    )
+    for n in range(4):
+        payer = await _person(db_session, f"pagador{n}@km0lab.com", "00000")
+        payer.points = 100
+    await db_session.commit()
+
+    done = await tidy_demo(db_session, apply=True)
+    await db_session.commit()
+    assert any("vale" in line for line in done.changes)
+    codes = (
+        await db_session.execute(
+            select(Redemption.code).where(Redemption.shop_id == shop.id)
+        )
+    ).scalars().all()
+    assert len(codes) == 4
+    assert len(set(codes)) == 4
+    assert "80000" not in codes

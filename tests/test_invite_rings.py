@@ -8,8 +8,9 @@ limit. Saving the action from the panel does not clear the new columns.
 import pytest
 from sqlalchemy import select
 
-from app.models import PointAction
-from tests._municipalities import API, admin_headers
+from app.models import InvitationConversion, InvitationLink, PointAction, User
+from app.roles import flags_from_roles
+from tests._municipalities import API, admin_headers, single_town
 from tests.test_invite_limit import _link, _pilot_town, _points, _signup, _summary
 
 pytestmark = pytest.mark.asyncio
@@ -64,6 +65,43 @@ async def test_the_chain_pays_three_then_one_then_nothing(
     assert hero["user"]["points"] == 50
     assert await _points(client, anna) == before + 100
     assert (await _summary(client, anna))["friends_rewarded"] == 3
+
+
+async def test_an_invitation_from_another_town_does_not_change_the_ring(
+    client, db_session, capture_otp
+):
+    await _pilot_town(db_session)
+    other = await single_town(db_session, "Blanes", "17300")
+    anna = await _signup(client, capture_otp, "anna@test.cat", "08380")
+    inviter = User(
+        email="blanes@test.cat",
+        slug="blanes-inviter",
+        postal_code="17300",
+        points=0,
+        **flags_from_roles(["resident"]),
+    )
+    db_session.add(inviter)
+    await db_session.flush()
+    link = InvitationLink(
+        public_code="BLANES01",
+        inviter_user_id=inviter.id,
+        kind="person",
+        town_id=other.id,
+    )
+    db_session.add(link)
+    await db_session.flush()
+    db_session.add(
+        InvitationConversion(
+            link_id=link.id,
+            kind="person",
+            invitee_user_id=anna["user"]["id"],
+            town_id=other.id,
+            status="granted",
+            reward_points=0,
+        )
+    )
+    await db_session.commit()
+    assert (await _summary(client, anna))["friend_limit"] == 3
 
 
 async def test_empty_ring_columns_keep_one_limit_for_everyone(

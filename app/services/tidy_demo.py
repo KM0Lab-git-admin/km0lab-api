@@ -34,6 +34,7 @@ from app.models import (
 )
 from app.services.pilot_points import set_pilot_points
 from app.services.points import apply_points
+from app.services.voucher_codes import allocate_voucher_code
 
 WELCOME = 50
 SCAN = 100
@@ -290,7 +291,7 @@ async def _merchant_panel(db, town_id: str, apply: bool, report: TidyReport) -> 
                         town_id=town_id,
                         shop_id=shop.id,
                         when=datetime.now(timezone.utc) - timedelta(days=index + 1),
-                        code=f"{80000 + index}",
+                        code=await allocate_voucher_code(db),
                     )
         if used + adding < 4:
             report.notes.append(

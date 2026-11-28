@@ -1,12 +1,13 @@
 """A rehearsal is removed from its municipality, and only that rehearsal."""
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from app.models import Promotion, QrScan, Redemption, Reward, Shop, User
 from app.services.rehearsal_purge import (
     NOTHING,
     RehearsalRefused,
+    _stock_plan,
     purge_rehearsal,
 )
 from tests._municipalities import API, admin_headers, single_town
@@ -148,6 +149,70 @@ async def test_an_outsider_scan_refuses_and_deletes_nothing(
         await purge_rehearsal(db_session, town="Blanes", emails=EMAILS, dry_run=False)
     assert await db_session.scalar(select(func.count()).select_from(Shop)) == 1
     assert await db_session.get(User, outsider["user"]["id"]) is not None
+
+
+async def test_a_voucher_at_a_real_shop_refuses_and_deletes_nothing(
+    client, db_session, capture_otp, monkeypatch
+):
+    _town, reward = await _rehearsal(client, db_session, capture_otp, monkeypatch)
+    real = Shop(
+        town_id=_town.id,
+        name="Forn de veritat",
+        categories=[],
+        contact_email="veritat@blanes.cat",
+        visit_points=10,
+        status="active",
+        qr_code="VERITAT",
+    )
+    db_session.add(real)
+    await db_session.flush()
+    redemption = (await db_session.execute(select(Redemption))).scalars().one()
+    redemption.shop_id = real.id
+    redemption.status = "used"
+    await db_session.commit()
+
+    with pytest.raises(RehearsalRefused, match="comercio de fuera"):
+        await purge_rehearsal(db_session, town="Blanes", emails=EMAILS, dry_run=False)
+    assert await db_session.scalar(select(func.count()).select_from(Shop)) == 2
+    assert await db_session.get(Redemption, redemption.id) is not None
+    fresh = await db_session.get(Reward, reward.id)
+    assert fresh.stock == 0
+
+
+async def test_returned_stock_is_read_after_the_lock(db_session):
+    town = await single_town(db_session, "Lloret", "17310")
+    reward = Reward(
+        town_id=town.id,
+        name="Coca",
+        type="product",
+        points_required=10,
+        stock=1,
+        status="sold_out",
+    )
+    user = User(email="a@lloret.cat", slug="a-lloret", points=0)
+    db_session.add_all([reward, user])
+    await db_session.flush()
+    redemption = Redemption(
+        town_id=town.id,
+        user_id=user.id,
+        reward_id=reward.id,
+        flow="delivery",
+        points_spent=10,
+        status="requested",
+    )
+    db_session.add(redemption)
+    await db_session.commit()
+    await db_session.execute(
+        text("UPDATE rewards SET stock = 5 WHERE id = :id"),
+        {"id": reward.id},
+    )
+    await db_session.commit()
+
+    plan = await _stock_plan(db_session, [redemption], write=True)
+    assert (plan[0].before, plan[0].after, plan[0].status) == (5, 6, "active")
+    await db_session.flush()
+    await db_session.refresh(reward)
+    assert reward.stock == 6
 
 
 async def test_an_administrator_on_the_list_is_refused(

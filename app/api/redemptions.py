@@ -100,15 +100,17 @@ async def _refund(db: AsyncSession, redemption: Redemption) -> None:
     if resident is None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="Cannot cancel")
     await lock_user_points(db, resident)
-    await apply_points(
-        db,
-        user=resident,
-        points=redemption.points_spent,
-        type="refund",
-        town_id=redemption.town_id,
-        ref_id=redemption.id,
-        description="Cancelled redemption",
-    )
+    # A free reward has nothing to give back. apply_points rejects zero.
+    if redemption.points_spent:
+        await apply_points(
+            db,
+            user=resident,
+            points=redemption.points_spent,
+            type="refund",
+            town_id=redemption.town_id,
+            ref_id=redemption.id,
+            description="Cancelled redemption",
+        )
     reward = await db.get(
         Reward, redemption.reward_id, with_for_update=True, populate_existing=True
     )
@@ -229,6 +231,12 @@ async def list_redemptions(
     return [_to_out(r) for r in rows]
 
 
+async def _count_miss(db: AsyncSession, shop_id: str, exc: HTTPException) -> None:
+    """The try counts toward the cap. The answer the shop sees stays."""
+    await note_attempt(db, shop_id, success=False)
+    raise exc
+
+
 def _refuse_unusable(redemption: Redemption) -> None:
     if is_expired(redemption):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="expired")
@@ -260,8 +268,15 @@ async def validate_voucher(
         await note_attempt(db, shop.id, success=False)
         raise _hidden()
     if redemption.shop_id and redemption.shop_id != shop.id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Out of shop scope")
-    _refuse_unusable(redemption)
+        await _count_miss(
+            db,
+            shop.id,
+            HTTPException(status.HTTP_403_FORBIDDEN, detail="Out of shop scope"),
+        )
+    try:
+        _refuse_unusable(redemption)
+    except HTTPException as exc:
+        await _count_miss(db, shop.id, exc)
     await _mark_used(
         db, redemption, shop=shop, actor=actor, amount_applied=payload.amount_applied
     )
@@ -282,11 +297,14 @@ async def update_status(
     )
     if not redemption or redemption.town_id != user.town_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Redemption not found")
+    # A used or delivered reward has already left. Nothing moves it back.
+    if (
+        redemption.status in {"used", "delivered"}
+        and payload.status != redemption.status
+    ):
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="Cannot cancel")
     if payload.status == "cancelled":
-        if (
-            redemption.status in {"cancelled", "used"}
-            or redemption.payment_id is not None
-        ):
+        if redemption.status == "cancelled" or redemption.payment_id is not None:
             raise HTTPException(status.HTTP_409_CONFLICT, detail="Cannot cancel")
         await _refund(db, redemption)
     elif redemption.status == "cancelled":
@@ -324,8 +342,15 @@ async def use_voucher(
     ):
         raise _hidden()
     if redemption.shop_id and redemption.shop_id != shop.id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Out of shop scope")
-    _refuse_unusable(redemption)
+        await _count_miss(
+            db,
+            shop.id,
+            HTTPException(status.HTTP_403_FORBIDDEN, detail="Out of shop scope"),
+        )
+    try:
+        _refuse_unusable(redemption)
+    except HTTPException as exc:
+        await _count_miss(db, shop.id, exc)
     await _mark_used(
         db, redemption, shop=shop, actor=actor, amount_applied=payload.amount_applied
     )

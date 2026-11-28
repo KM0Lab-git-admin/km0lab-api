@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -312,6 +312,26 @@ async def _refuse_outsiders(
         if owners:
             reasons.append(f"{owners} cuenta(s) de fuera ligadas al comercio")
 
+    # The other way around: a listed person spent a voucher at a shop we are
+    # not deleting, or the town has already paid that voucher.
+    if shop_ids:
+        shop_outside = and_(
+            Redemption.shop_id.is_not(None),
+            Redemption.shop_id.notin_(shop_ids),
+        )
+    else:
+        shop_outside = Redemption.shop_id.is_not(None)
+    leaked = await _count(
+        db,
+        Redemption,
+        Redemption.user_id.in_(user_ids),
+        or_(shop_outside, Redemption.payment_id.is_not(None)),
+    )
+    if leaked:
+        reasons.append(
+            f"{leaked} vale(s) de un comercio de fuera o ya pagado(s)"
+        )
+
     rows = (
         await db.execute(
             select(InvitationConversion, InvitationLink)
@@ -361,6 +381,25 @@ async def _stock_plan(
         units[redemption.reward_id] = units.get(redemption.reward_id, 0) + 1
     returned: list[StockReturn] = []
     for reward_id, count in units.items():
+        if write:
+            locked = await db.get(
+                Reward, reward_id, with_for_update=True, populate_existing=True
+            )
+            if locked is None or locked.stock is None:
+                continue
+            before = locked.stock
+            after = before + count
+            status = locked.status
+            if after > 0 and status == "sold_out":
+                status = "active"
+            locked.stock = after
+            locked.status = status
+            returned.append(
+                StockReturn(
+                    reward=locked.name, before=before, after=after, status=status
+                )
+            )
+            continue
         reward = await db.get(Reward, reward_id)
         if reward is None or reward.stock is None:
             continue
@@ -369,13 +408,6 @@ async def _stock_plan(
         status = reward.status
         if after > 0 and status == "sold_out":
             status = "active"
-        if write:
-            locked = await db.get(Reward, reward_id, with_for_update=True)
-            if locked is not None and locked.stock is not None:
-                locked.stock = after
-                if after > 0 and locked.status == "sold_out":
-                    locked.status = "active"
-                status = locked.status
         returned.append(
             StockReturn(reward=reward.name, before=before, after=after, status=status)
         )

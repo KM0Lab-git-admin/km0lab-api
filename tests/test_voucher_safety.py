@@ -329,6 +329,239 @@ async def test_cancel_returns_points_and_stock(client, db_session, capture_otp):
     assert refused.status_code == 409
 
 
+async def test_used_and_delivered_cannot_leave_their_status(
+    client, db_session, capture_otp
+):
+    town, cp = await _town(db_session, "Calella", "08370")
+    product = Reward(
+        town_id=town.id,
+        name="Panera",
+        description="d",
+        type="product",
+        points_required=40,
+        value="1",
+        status="active",
+        stock=1,
+    )
+    voucher_reward = Reward(
+        town_id=town.id,
+        name="Val",
+        description="d",
+        type="discount",
+        points_required=40,
+        value="5€",
+        status="active",
+        stock=1,
+    )
+    shop = Shop(
+        town_id=town.id,
+        name="Forn",
+        categories=[],
+        contact_email="forn-calella@test.cat",
+        visit_points=10,
+        status="active",
+        qr_code="CALELLA",
+    )
+    db_session.add_all([product, voucher_reward, shop])
+    await db_session.flush()
+    admin = User(
+        email="admin-calella@test.cat",
+        slug="admin-calella",
+        postal_code=cp,
+        points=0,
+        **flags_from_roles(["admin", "resident"]),
+    )
+    merchant = User(
+        email="merchant-calella@test.cat",
+        slug="merchant-calella",
+        postal_code=cp,
+        shop_id=shop.id,
+        points=0,
+        **flags_from_roles(["merchant", "resident"]),
+    )
+    db_session.add_all([admin, merchant])
+    await db_session.commit()
+    headers = await _resident(client, capture_otp, "vei-calella@test.cat", cp)
+    admin_headers = _token(admin, ["admin", "resident"], town.id)
+
+    physical = await client.post(
+        "/api/v1/redemptions",
+        headers=headers,
+        json={"reward_id": product.id},
+    )
+    assert physical.status_code == 201, physical.text
+    delivered = await client.patch(
+        f"/api/v1/redemptions/{physical.json()['id']}/status",
+        headers=admin_headers,
+        json={"status": "delivered"},
+    )
+    assert delivered.status_code == 200, delivered.text
+    kept = await client.patch(
+        f"/api/v1/redemptions/{physical.json()['id']}/status",
+        headers=admin_headers,
+        json={"status": "cancelled"},
+    )
+    assert kept.status_code == 409
+    me = await client.get("/api/v1/users/me", headers=headers)
+    assert me.json()["points"] == 60
+    await db_session.refresh(product)
+    assert (product.stock, product.status) == (0, "sold_out")
+
+    created = await client.post(
+        "/api/v1/redemptions",
+        headers=headers,
+        json={"reward_id": voucher_reward.id},
+    )
+    assert created.status_code == 201, created.text
+    used = await client.post(
+        "/api/v1/redemptions/validate",
+        headers=_token(merchant, ["merchant", "resident"], town.id),
+        json={"code": created.json()["code"]},
+    )
+    assert used.status_code == 200, used.text
+    reopened = await client.patch(
+        f"/api/v1/redemptions/{created.json()['id']}/status",
+        headers=admin_headers,
+        json={"status": "pending_use"},
+    )
+    assert reopened.status_code == 409
+    still = await client.get(
+        "/api/v1/redemptions",
+        headers=admin_headers,
+        params={"status": "used"},
+    )
+    assert still.status_code == 200, still.text
+    assert any(row["id"] == created.json()["id"] for row in still.json())
+    me = await client.get("/api/v1/users/me", headers=headers)
+    assert me.json()["points"] == 20
+
+
+async def test_a_known_unusable_code_counts_as_a_miss(
+    client, db_session, capture_otp
+):
+    town, cp = await _town(db_session, "Blanes", "17300")
+    shop = Shop(
+        town_id=town.id,
+        name="Fleca",
+        categories=[],
+        contact_email="fleca-blanes@test.cat",
+        visit_points=10,
+        status="active",
+        qr_code="BLANESFLECA",
+    )
+    reward = Reward(
+        town_id=town.id,
+        name="Val",
+        description="d",
+        type="discount",
+        points_required=40,
+        value="5€",
+        status="active",
+    )
+    db_session.add_all([shop, reward])
+    await db_session.flush()
+    merchant = User(
+        email="fleca-blanes@test.cat",
+        slug="fleca-blanes",
+        postal_code=cp,
+        shop_id=shop.id,
+        points=100,
+        **flags_from_roles(["merchant", "resident"]),
+    )
+    db_session.add(merchant)
+    await db_session.commit()
+    headers = _token(merchant, ["merchant", "resident"], town.id)
+    own = await client.post(
+        "/api/v1/redemptions",
+        headers=headers,
+        json={"reward_id": reward.id},
+    )
+    assert own.status_code == 201, own.text
+    code = own.json()["code"]
+    used = await client.post(
+        "/api/v1/redemptions/validate", headers=headers, json={"code": code}
+    )
+    assert used.status_code == 200, used.text
+
+    for _ in range(10):
+        missed = await client.post(
+            "/api/v1/redemptions/validate", headers=headers, json={"code": code}
+        )
+        assert missed.status_code == 400
+        assert missed.json()["detail"] == "already_used"
+    blocked = await client.post(
+        "/api/v1/redemptions/validate", headers=headers, json={"code": code}
+    )
+    assert blocked.status_code == 429
+    assert blocked.json()["detail"]["code"] == "too_many_attempts"
+
+
+async def test_cancelling_a_free_redemption_returns_nothing(
+    client, db_session, capture_otp
+):
+    town, cp = await _town(db_session, "Pineda", "08397")
+    reward = Reward(
+        town_id=town.id,
+        name="Gratuït",
+        description="d",
+        type="discount",
+        points_required=0,
+        value="0€",
+        status="active",
+        stock=3,
+    )
+    db_session.add(reward)
+    await db_session.flush()
+    admin = User(
+        email="admin-pineda@test.cat",
+        slug="admin-pineda",
+        postal_code=cp,
+        points=0,
+        **flags_from_roles(["admin", "resident"]),
+    )
+    resident = User(
+        email="vei-pineda@test.cat",
+        slug="vei-pineda",
+        postal_code=cp,
+        points=100,
+        **flags_from_roles(["resident"]),
+    )
+    db_session.add_all([admin, resident])
+    await db_session.flush()
+    redemption = Redemption(
+        town_id=town.id,
+        user_id=resident.id,
+        reward_id=reward.id,
+        flow="voucher_qr",
+        points_spent=0,
+        status="pending_use",
+        code="54321",
+    )
+    db_session.add(redemption)
+    await db_session.commit()
+
+    cancelled = await client.patch(
+        f"/api/v1/redemptions/{redemption.id}/status",
+        headers=_token(admin, ["admin", "resident"], town.id),
+        json={"status": "cancelled"},
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["status"] == "cancelled"
+    await db_session.refresh(resident)
+    await db_session.refresh(reward)
+    assert resident.points == 100
+    assert reward.stock == 4
+    refunds = (
+        await db_session.execute(
+            select(PointsTransaction).where(
+                PointsTransaction.user_id == resident.id,
+                PointsTransaction.type == "refund",
+            )
+        )
+    ).scalars().all()
+    assert refunds == []
+
+
 async def test_expiry_comes_from_the_town(client, db_session, capture_otp):
     open_town, open_cp = await _town(db_session, "Hostalric", "17450")
     closed, closed_cp = await _town(db_session, "Riells", "17421", expiry_months=1)

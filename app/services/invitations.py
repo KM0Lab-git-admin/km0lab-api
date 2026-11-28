@@ -213,17 +213,20 @@ async def invitation_ring(db: AsyncSession, user: User) -> int:
 
     A conversion that paid nothing still counts as having been invited.
     The walk stops at 2; a longer chain does not need a bigger number.
+    Only invitations of this person's municipality count.
     """
     user_id = user.id
+    town_id = user.town_id
     seen: set[str] = set()
     ring = 0
     while ring < 2 and user_id not in seen:
         seen.add(user_id)
         conversion = await _existing_person_conversion(db, user_id)
-        if conversion is None:
+        # Another municipality's invitation is not this town's ring.
+        if conversion is None or conversion.town_id != town_id:
             return ring
         link = await db.get(InvitationLink, conversion.link_id)
-        if link is None:
+        if link is None or link.town_id != town_id:
             return ring
         user_id = link.inviter_user_id
         ring += 1
