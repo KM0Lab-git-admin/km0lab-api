@@ -208,18 +208,60 @@ async def snapshot_reward_points(
     return settings.invite_person_points
 
 
+async def invitation_ring(db: AsyncSession, user: User) -> int:
+    """How this person joined: 0 alone, 1 invited by a 0, 2 anyone deeper.
+
+    A conversion that paid nothing still counts as having been invited.
+    The walk stops at 2; a longer chain does not need a bigger number.
+    """
+    user_id = user.id
+    seen: set[str] = set()
+    ring = 0
+    while ring < 2 and user_id not in seen:
+        seen.add(user_id)
+        conversion = await _existing_person_conversion(db, user_id)
+        if conversion is None:
+            return ring
+        link = await db.get(InvitationLink, conversion.link_id)
+        if link is None:
+            return ring
+        user_id = link.inviter_user_id
+        ring += 1
+    return ring
+
+
+def _limit_for_ring(action, ring: int) -> int | None:
+    """The ring's own number, or the ring-0 number when that column is empty.
+
+    Empty means "not configured yet", which is today's single limit. A
+    stored 0 is a real cap: that person earns nothing for inviting.
+    """
+    own = action.per_user_limit
+    if ring == 1:
+        own = action.per_user_limit_ring1
+    elif ring >= 2:
+        own = action.per_user_limit_ring2
+    if own is not None:
+        return own
+    return action.per_user_limit
+
+
 async def friend_limit(
     db: AsyncSession, *, user: User, town_id: str | None = None
 ) -> int | None:
     """How many friends ``user`` can be rewarded for, or None for no limit.
 
-    It is the "uses per user" of the municipality's invitation action, so
-    each municipality sets its own from the backoffice.
+    Ring 0 uses "uses per user", which the backoffice edits. Ring 1 and
+    ring 2 use the two columns beside it. An empty column falls back to
+    the ring-0 number, so a municipality that has not been given the new
+    numbers keeps one limit for everyone.
     """
     action = await find_active_action(
         db, action_type=ACTION_INVITE_PERSON, user=user, town_id=town_id
     )
-    return action.per_user_limit if action is not None else None
+    if action is None:
+        return None
+    return _limit_for_ring(action, await invitation_ring(db, user))
 
 
 async def friends_rewarded(

@@ -6,8 +6,10 @@ Decided on 27-11-2026 for every municipality (and for the demonstration):
   completes their signup 50. Every other action is switched off.
 - A real municipality admits 200 accounts (``towns.max_residents``); the
   demonstration, any number.
-- A person is rewarded for three friends at most (the "uses per user" of
-  the invitation action; each municipality can change it in the backoffice).
+- A person who joined alone is rewarded for three friends at most. Someone
+  they invited is rewarded for one, and anyone further along the chain for
+  none. The backoffice edits the first number; the other two are these
+  constants.
 - Each shop gives its points once per resident: the wait before the same
   shop pays again goes from 30 days to a year, longer than the pilot. (The
   app says "once" instead of showing a date that far away.)
@@ -44,8 +46,11 @@ POINTS_PER_EURO = 100
 # Days before the same shop pays the same resident again: "once" in a pilot
 # of two months, and still once if it runs long.
 SCAN_COOLDOWN_DAYS = 365
-# Friends a person can be rewarded for inviting.
+# Friends a person can be rewarded for inviting, by how they joined:
+# alone (ring 0), invited by someone who joined alone (ring 1), or further.
 INVITE_FRIENDS_LIMIT = 3
+INVITE_FRIENDS_LIMIT_RING1 = 1
+INVITE_FRIENDS_LIMIT_RING2 = 0
 # Accounts a real municipality admits during the pilot.
 PILOT_MAX_RESIDENTS = 200
 
@@ -229,14 +234,30 @@ async def set_pilot_points(
             if action.is_fake == main_partition:
                 report.scan_cooldown_days = SCAN_COOLDOWN_DAYS
         if action.type == "invite_person":
-            if change(
-                "action",
-                f"{label}: friends rewarded per person",
-                action.per_user_limit if action.per_user_limit is not None else "no limit",
-                INVITE_FRIENDS_LIMIT,
-            ):
-                if apply:
-                    action.per_user_limit = INVITE_FRIENDS_LIMIT
+            rings = (
+                (
+                    "friends rewarded for someone who joined alone",
+                    action.per_user_limit,
+                    INVITE_FRIENDS_LIMIT,
+                    "per_user_limit",
+                ),
+                (
+                    "friends rewarded for someone who was invited",
+                    action.per_user_limit_ring1,
+                    INVITE_FRIENDS_LIMIT_RING1,
+                    "per_user_limit_ring1",
+                ),
+                (
+                    "friends rewarded further along the chain",
+                    action.per_user_limit_ring2,
+                    INVITE_FRIENDS_LIMIT_RING2,
+                    "per_user_limit_ring2",
+                ),
+            )
+            for what, before, after, field_name in rings:
+                shown = before if before is not None else "no limit"
+                if change("action", f"{label}: {what}", shown, after) and apply:
+                    setattr(action, field_name, after)
         if action.type in ACTION_POINTS:
             points = ACTION_POINTS[action.type]
             if change("action", f"{label}: points", action.points, points) and apply:
@@ -276,7 +297,11 @@ async def set_pilot_points(
                             else {}
                         ),
                         **(
-                            {"per_user_limit": INVITE_FRIENDS_LIMIT}
+                            {
+                                "per_user_limit": INVITE_FRIENDS_LIMIT,
+                                "per_user_limit_ring1": INVITE_FRIENDS_LIMIT_RING1,
+                                "per_user_limit_ring2": INVITE_FRIENDS_LIMIT_RING2,
+                            }
                             if spec["type"] == "invite_person"
                             else {}
                         ),

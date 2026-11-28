@@ -134,6 +134,8 @@ class PointActionUpdate(BaseModel):
 
     points: int | None = Field(default=None, ge=0)
 
+    # Ring 1 and ring 2 stay off this schema on purpose: the panel only
+    # edits "uses per user" (ring 0). A save must not clear the others.
     per_user_limit: int | None = None
 
     total_limit: int | None = None

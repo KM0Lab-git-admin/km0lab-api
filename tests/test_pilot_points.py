@@ -110,8 +110,13 @@ async def test_three_ways_to_earn_and_one_scale(db_session):
     earning = {t: a.points for t, a in actions.items() if a.active}
     assert earning == {"signup": 50, "qr_scan": 100, "invite_person": 50}
     assert not actions["birthday"].active and not actions["invite_business"].active
-    # A person is rewarded for three friends at most.
-    assert actions["invite_person"].per_user_limit == 3
+    # Alone: 3 friends. Invited by them: 1. Further along the chain: none.
+    invite = actions["invite_person"]
+    assert (
+        invite.per_user_limit,
+        invite.per_user_limit_ring1,
+        invite.per_user_limit_ring2,
+    ) == (3, 1, 0)
     # Each shop pays a resident once: a year, longer than the pilot.
     assert actions["qr_scan"].cooldown_days == 365 == report.scan_cooldown_days
 

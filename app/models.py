@@ -511,6 +511,11 @@ class PointAction(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     points: Mapped[int] = mapped_column(Integer, default=0)
     per_user_limit: Mapped[int | None] = mapped_column(Integer, default=None)
+    # Friends rewarded for someone who was invited (ring 1) or invited by
+    # someone who was invited (ring 2+). Null means "use per_user_limit",
+    # so a panel save that only knows the first number leaves these alone.
+    per_user_limit_ring1: Mapped[int | None] = mapped_column(Integer, default=None)
+    per_user_limit_ring2: Mapped[int | None] = mapped_column(Integer, default=None)
     total_limit: Mapped[int | None] = mapped_column(Integer, default=None)
     valid_from: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     valid_until: Mapped[datetime | None] = mapped_column(DateTime, default=None)
