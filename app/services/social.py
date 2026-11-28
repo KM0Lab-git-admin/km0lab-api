@@ -24,8 +24,10 @@ from jose import JWTError, jwt
 from app.config import get_settings
 from app.services.identities import (
     PROVIDER_APPLE,
+    PROVIDER_GOOGLE,
     SOCIAL_PROVIDERS,
 )
+from app.services.oidc import CredentialRefused, verify_id_token
 
 LINK_PURPOSE = "link_identity"
 LINK_TOKEN_MINUTES = 15
@@ -44,8 +46,8 @@ class SocialProfile:
     last_name: str | None = None
 
 
-class SocialRefused(Exception):
-    """The network did not vouch for that credential."""
+# The network did not vouch for that credential.
+SocialRefused = CredentialRefused
 
 
 Verifier = Callable[[str], Awaitable[SocialProfile]]
@@ -89,6 +91,35 @@ async def verify_credential(provider: str, credential: str) -> SocialProfile:
     if not (profile.subject or "").strip():
         raise SocialRefused("no subject")
     return profile
+
+
+# ── Google ────────────────────────────────────────────────────────────
+# The "Sign in with Google" button hands the app an identity token; the
+# credential sent here is that token. Google always gives an email and
+# says whether it has verified it.
+
+GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs"
+GOOGLE_ISSUERS = ("accounts.google.com", "https://accounts.google.com")
+
+
+async def verify_google(credential: str) -> SocialProfile:
+    claims = await verify_id_token(
+        credential,
+        jwks_url=GOOGLE_JWKS_URL,
+        issuers=GOOGLE_ISSUERS,
+        audience=client_id(PROVIDER_GOOGLE),
+    )
+    return SocialProfile(
+        subject=str(claims["sub"]),
+        email=claims.get("email") or None,
+        # A boolean; some of Google's tokens carry it as text.
+        email_verified=claims.get("email_verified") in (True, "true"),
+        first_name=claims.get("given_name") or None,
+        last_name=claims.get("family_name") or None,
+    )
+
+
+VERIFIERS[PROVIDER_GOOGLE] = verify_google
 
 
 # ── "Your email is missing" ───────────────────────────────────────────
