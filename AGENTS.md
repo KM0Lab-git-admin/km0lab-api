@@ -132,10 +132,12 @@ Reglas:
   código postal, duplicados) se rechaza al enviar; lo demás lo ve el
   administrador en `GET /shops/{id}/review`.
 - A quien invitó al comercio se le paga **al aprobar**, no antes.
-- El motivo del rechazo viaja en el correo y **no se guarda**. Las
+- El motivo del rechazo viaja en el correo y se guarda en
+  `shops.review_note` para que el comercio lo lea en su pantalla. Las
   rechazadas se borran a los 30 días con `scripts/purge_rejected_shops.py`
   (sin `--apply` solo enseña); una rechazada no se edita.
-- `/users/me` y el login devuelven `shop_request` (`review` o `rejected`).
+- `/users/me` y el login devuelven `shop_request` (`review` o `rejected`,
+  con `reason` si fue rechazada).
 
 ## Catálogo de premios
 

@@ -367,7 +367,9 @@ class Shop(Base):
     opening_hours: Mapped[dict | None] = mapped_column(JSON, default=None)
     status: Mapped[str] = mapped_column(
         String(20), default="pending", index=True
-    )  # active | pending | inactive
+    )  # active | pending | inactive | review | rejected
+    # Why its request to join was rejected, as the administrator wrote it.
+    review_note: Mapped[str | None] = mapped_column(String(500), default=None)
     qr_code: Mapped[str | None] = mapped_column(
         String(64), unique=True, default=None, index=True
     )

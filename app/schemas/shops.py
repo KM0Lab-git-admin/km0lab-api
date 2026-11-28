@@ -31,6 +31,8 @@ class ShopOut(BaseModel):
     i18n_source_lang: str = "ca"
     opening_hours: OpeningHours | None
     status: str
+    # Why its request was rejected. Null in the public card.
+    review_note: str | None = None
     # The scan code. Null in every read that is not the shop's own or
     # its admin's: whoever knows it can collect the visit from anywhere.
     qr_code: str | None

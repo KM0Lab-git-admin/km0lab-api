@@ -19,7 +19,8 @@ What the machine checks (the request is refused, or the administrator is
 warned) and what only a person can know (that the shop exists and that
 whoever asks runs it) is in ``review_checks``. The administrator of the
 municipality approves or rejects; rejecting needs a reason, which goes in
-the email to the shop and is not stored.
+the email to the shop and is kept in ``shops.review_note`` so the shop can
+read it on its screen.
 """
 
 from __future__ import annotations
@@ -174,6 +175,7 @@ async def approve_shop(db: AsyncSession, shop: Shop) -> User | None:
     if shop.status not in (SHOP_REVIEW, SHOP_REJECTED):
         raise ReviewRefused("shop_not_in_review", "This shop is not waiting for validation.")
     shop.status = "active"
+    shop.review_note = None
     await ensure_shop_qr(db, shop)
 
     owner = (
@@ -196,11 +198,12 @@ async def approve_shop(db: AsyncSession, shop: Shop) -> User | None:
     return owner
 
 
-async def reject_shop(db: AsyncSession, shop: Shop) -> None:
-    """Reject a request. The reason travels in the email, not here."""
+async def reject_shop(db: AsyncSession, shop: Shop, reason: str) -> None:
+    """Reject a request, keeping the reason the shop will be shown."""
     if shop.status != SHOP_REVIEW:
         raise ReviewRefused("shop_not_in_review", "This shop is not waiting for validation.")
     shop.status = SHOP_REJECTED
+    shop.review_note = reason.strip()
     # The 30 days before deletion count from this moment.
     shop.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.flush()
@@ -265,7 +268,10 @@ async def user_out(db: AsyncSession, user: User) -> UserOut:
     request = await shop_request_of(db, user)
     if request is not None:
         out.shop_request = ShopRequestOut(
-            shop_id=request.id, name=request.name, status=request.status
+            shop_id=request.id,
+            name=request.name,
+            status=request.status,
+            reason=request.review_note if request.status == SHOP_REJECTED else None,
         )
     return out
 

@@ -28,6 +28,8 @@ class ShopRequestOut(BaseModel):
     name: str
     # review (waiting for validation) | rejected
     status: str
+    # Why it was rejected, as the administrator wrote it.
+    reason: str | None = None
 
 
 class UserOut(BaseModel):

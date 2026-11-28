@@ -132,7 +132,12 @@ async def _shop_out(
             else (town.name if town else None),
             "has_qr": bool(shop.qr_code),
             **(
-                {"qr_code": None, "contact_email": "", "tax_id": None}
+                {
+                    "qr_code": None,
+                    "contact_email": "",
+                    "tax_id": None,
+                    "review_note": None,
+                }
                 if public
                 else {}
             ),
@@ -965,10 +970,10 @@ async def reject_shop_request(
     db: AsyncSession = Depends(get_db),
 ):
     """Reject a request, saying why. The reason goes in the email to the
-    shop and is not stored; the request is deleted 30 days later."""
+    shop and on its screen; the request is deleted 30 days later."""
     shop = await _request_for_admin(db, user, shop_id)
     try:
-        await reject_shop(db, shop)
+        await reject_shop(db, shop, payload.reason)
     except ReviewRefused as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=exc.code) from exc
     await db.commit()

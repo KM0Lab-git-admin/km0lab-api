@@ -164,6 +164,7 @@ async def test_nothing_of_a_held_shop_is_public(client, db_session, outbox):
         "shop_id": shop_id,
         "name": "Forn de la Plaça",
         "status": "review",
+        "reason": None,
     }
     assert "merchant" not in me["roles"] and me["shop_id"] is None
 
@@ -236,6 +237,9 @@ async def test_rejecting_needs_a_reason_and_frees_the_email(client, db_session, 
     assert r.status_code == 200 and r.json()["status"] == "rejected"
     me = (await client.get(f"{API}/users/me", headers=forn)).json()
     assert me["shop_request"]["status"] == "rejected" and me["shop_id"] is None
+    # The shop reads why on its screen, not only in the email.
+    assert me["shop_request"]["reason"] == "No hem trobat el comerç."
+    assert r.json()["review_note"] == "No hem trobat el comerç."
     listed = await client.get(f"{API}/shops/public", params={"postal_code": "08380"})
     assert listed.json() == []
     # A rejected request is left as it was until it is deleted.
@@ -248,6 +252,7 @@ async def test_rejecting_needs_a_reason_and_frees_the_email(client, db_session, 
     me = (await client.get(f"{API}/users/me", headers=forn)).json()
     assert me["shop_request"]["shop_id"] == again.json()["shop_id"]
     assert me["shop_request"]["status"] == "review"
+    assert me["shop_request"]["reason"] is None
 
 
 async def test_checks_tell_the_administrator_what_to_look_at(client, db_session, outbox):
