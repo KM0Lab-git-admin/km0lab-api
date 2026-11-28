@@ -40,6 +40,28 @@ settings = get_settings()
 RESEND_API_URL = "https://api.resend.com/emails"
 
 
+def _raise_for_resend(response: httpx.Response) -> None:
+    """Fail on a refused send, saying so in the log.
+
+    One refusal is told apart: the plan's quota of emails (per day or per
+    month) is used up. Then no email leaves at all, access codes included,
+    until it renews or the plan is enlarged; a retry in a few minutes does
+    not help. It gets its own line so it can be found and watched for.
+    """
+    if response.status_code < 400:
+        return
+    if response.status_code == 429 and "quota" in response.text.lower():
+        logger.critical(
+            "CUPO DE CORREO AGOTADO en Resend (%s): %s. No sale ningún correo, "
+            "tampoco los códigos de acceso, hasta que se renueve o se amplíe el plan.",
+            response.status_code,
+            response.text,
+        )
+    else:
+        logger.error("Resend error %s: %s", response.status_code, response.text)
+    response.raise_for_status()
+
+
 def _otp_parts(
     code: str,
     *,
@@ -81,13 +103,7 @@ async def _send_via_resend(
             },
             json=payload,
         )
-    if response.status_code >= 400:
-        logger.error(
-            "Resend error %s: %s",
-            response.status_code,
-            response.text,
-        )
-        response.raise_for_status()
+    _raise_for_resend(response)
     logger.info("OTP enviado vía Resend a %s (lang=%s)", to, normalize_otp_lang(lang))
 
 
@@ -153,9 +169,7 @@ async def _deliver(to: str, subject: str, text: str, html_body: str) -> bool:
                     "html": html_body,
                 },
             )
-        if response.status_code >= 400:
-            logger.error("Resend error %s: %s", response.status_code, response.text)
-            response.raise_for_status()
+        _raise_for_resend(response)
         return True
     if settings.smtp_host:
         message = EmailMessage()

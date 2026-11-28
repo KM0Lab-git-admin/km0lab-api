@@ -6,7 +6,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from app.api import (
@@ -30,7 +29,7 @@ from app.api import (
 from app.api import demo as demo_sheet
 from app.config import get_settings
 from app.db import Base, engine
-from app.ratelimit import limiter
+from app.ratelimit import limiter, rate_limit_exceeded_handler
 from app.version import API_VERSION, AppVersionMiddleware, min_app_version
 
 logging.basicConfig(level=logging.INFO)
@@ -56,7 +55,7 @@ app = FastAPI(
 )
 
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 # Antes que CORS: así la respuesta 426 también sale con sus cabeceras CORS
 # y el navegador deja que la app la lea.

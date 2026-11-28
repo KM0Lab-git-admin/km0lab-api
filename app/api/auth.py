@@ -37,7 +37,12 @@ from app.catalog.email_otp import normalize_otp_lang
 from app.email import send_otp_email
 from app.models import OtpCode, Shop, User
 from app.qa import QA_POSTAL_CODE, is_qa_email, is_qa_postal_code
-from app.ratelimit import MAX_LIVE_OTP_CODES, MAX_OTP_ATTEMPTS, limiter
+from app.ratelimit import (
+    MAX_LIVE_OTP_CODES,
+    MAX_OTP_ATTEMPTS,
+    limiter,
+    too_many_response,
+)
 from app.roles import (
     ROLE_ADMIN,
     ROLE_MERCHANT,
@@ -99,19 +104,71 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 settings = get_settings()
 
 
-_OTP_REQUEST_LIMITS = {"development": "600/hour", "staging": "60/hour"}
-_OTP_VERIFY_LIMITS = {"development": "600/hour", "staging": "60/hour"}
+# Per connection (IP) and hour, when the environment sets nothing.
+DEFAULT_OTP_REQUESTS_PER_HOUR = 30
+DEFAULT_OTP_VERIFIES_PER_HOUR = 60
+OTP_EMAIL_LIMIT = "otp_email_limit"
+
+
+def _per_hour(configured: int | None, default: int) -> str:
+    """The limit by connection: the configured one, else the default.
+
+    Loose in local development, where tests and people loop. The fine brake
+    is elsewhere and does not depend on the connection: codes alive and
+    attempts per code, and codes per hour to the same email.
+    """
+    if configured and configured > 0:
+        return f"{configured}/hour"
+    if get_settings().environment.lower().strip() == "development":
+        return "600/hour"
+    return f"{default}/hour"
 
 
 def _otp_request_limit() -> str:
-    """Local: holgado (pruebas en bucle); UAT: generoso; producción: estricto."""
-    env = get_settings().environment.lower().strip()
-    return _OTP_REQUEST_LIMITS.get(env, "5/hour")
+    return _per_hour(
+        get_settings().otp_requests_per_hour, DEFAULT_OTP_REQUESTS_PER_HOUR
+    )
 
 
 def _otp_verify_limit() -> str:
-    env = get_settings().environment.lower().strip()
-    return _OTP_VERIFY_LIMITS.get(env, "10/hour")
+    return _per_hour(
+        get_settings().otp_verifies_per_hour, DEFAULT_OTP_VERIFIES_PER_HOUR
+    )
+
+
+async def _email_wait_seconds(db: AsyncSession, email: str) -> int:
+    """Seconds until ``email`` may be sent another code (0 = now).
+
+    At most ``otp_per_email_per_hour`` codes go to one mailbox in an hour,
+    whoever asks and from wherever: the limit by connection alone would let
+    one person fill somebody else's inbox. Counted on the codes themselves,
+    so it survives a restart. A code's ``expires_at`` is when it was asked
+    for plus its lifetime; that dates it without trusting the database's
+    clock.
+    """
+    cap = get_settings().otp_per_email_per_hour
+    if cap <= 0:
+        return 0
+    now = datetime.now(timezone.utc)
+    lifetime = timedelta(minutes=settings.otp_ttl_minutes)
+    asked_within_the_hour = OtpCode.expires_at > now + lifetime - timedelta(hours=1)
+    rows = (
+        (
+            await db.execute(
+                select(OtpCode.expires_at)
+                .where(OtpCode.email == email, asked_within_the_hour)
+                .order_by(OtpCode.expires_at.desc())
+                .limit(cap)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if len(rows) < cap:
+        return 0
+    # The oldest of the last ``cap`` codes leaves the hour first.
+    oldest_asked_at = rows[-1].replace(tzinfo=timezone.utc) - lifetime
+    return max(1, int((oldest_asked_at + timedelta(hours=1) - now).total_seconds()))
 
 
 # Why a code was refused, so the app can say it instead of a blanket
@@ -312,6 +369,10 @@ async def request_otp(
     # waiting for. Whoever already has an account is never stopped here.
     if await _would_overflow(db, email, payload.postal_code):
         raise _pilot_full()
+
+    wait = await _email_wait_seconds(db, email)
+    if wait:
+        return too_many_response(OTP_EMAIL_LIMIT, wait)
 
     # Earlier codes stay valid until they expire: whoever asks twice and
     # opens the first email must still get in. Wrong guesses count against

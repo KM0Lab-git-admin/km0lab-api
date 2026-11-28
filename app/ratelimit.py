@@ -2,12 +2,16 @@
 para aplicar límites por IP."""
 
 import ipaddress
+import math
 import secrets
+import time
 import uuid
 
 from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from app.config import get_settings
 
@@ -68,6 +72,53 @@ def rate_limit_key(request: Request) -> str:
 
 
 limiter = Limiter(key_func=rate_limit_key)
+
+RATE_LIMITED = "rate_limited"
+
+
+def wait_minutes(seconds: int) -> int:
+    """Seconds left, as the whole minutes a person is told to wait."""
+    return max(1, math.ceil(seconds / 60))
+
+
+def too_many_response(code: str, retry_after_seconds: int) -> JSONResponse:
+    """429 that says when to try again, for the app and in the headers.
+
+    ``detail`` is ``{"code", "message", "retry_after_seconds"}`` like the
+    other refusals of the access; ``Retry-After`` carries the same wait.
+    """
+    seconds = max(1, int(retry_after_seconds))
+    minutes = wait_minutes(seconds)
+    return JSONResponse(
+        status_code=429,
+        content={
+            "detail": {
+                "code": code,
+                "message": (
+                    "Massa intents. Torna-ho a provar d'aquí a "
+                    f"{minutes} minut{'s' if minutes != 1 else ''}."
+                ),
+                "retry_after_seconds": seconds,
+            }
+        },
+        headers={"Retry-After": str(seconds)},
+    )
+
+
+async def rate_limit_exceeded_handler(
+    request: Request, exc: RateLimitExceeded
+) -> JSONResponse:
+    """The limit by connection was hit: say when the window opens again."""
+    seconds = 3600
+    try:
+        item, args = request.state.view_rate_limit
+        seconds = item.get_expiry()
+        reset_at, _ = limiter.limiter.get_window_stats(item, *args)
+        seconds = int(reset_at - time.time())
+    except Exception:
+        # Without the window's own data, the whole window is the honest answer.
+        pass
+    return too_many_response(RATE_LIMITED, seconds)
 
 # Máximo de intentos de verificación por código OTP antes de invalidarlo
 # (anti fuerza bruta; complementa al rate limit por IP).

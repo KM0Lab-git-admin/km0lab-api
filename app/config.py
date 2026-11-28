@@ -28,6 +28,15 @@ class Settings(BaseSettings):
 
     # OTP
     otp_ttl_minutes: int = 10
+    # Límites por conexión (IP) y hora: cuántos códigos se piden y cuántas
+    # entradas se intentan. Sin valor: 30 y 60 (600 en development). Se
+    # suben por variable el día de una presentación con muchos vecinos en
+    # la misma wifi.
+    otp_requests_per_hour: int | None = None
+    otp_verifies_per_hour: int | None = None
+    # Códigos por hora al mismo correo, venga de donde venga la petición:
+    # lo que impide usar la API para llenar el buzón de otra persona.
+    otp_per_email_per_hour: int = 5
     otp_length: int = 6
     welcome_points: int = 100  # puntos de bienvenida al registrarse
     invite_person_points: int = 100
