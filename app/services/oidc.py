@@ -9,7 +9,9 @@ it is believed until all of this holds:
 - it was issued **for our app** (``aud`` is our client id) — a token issued
   for someone else's app is somebody else's login, not ours;
 - it was issued **by that network** (``iss``);
-- it has **not expired**.
+- it has **not expired**;
+- if a nonce is expected, it carries **that nonce**: the token was made
+  for a sign-in this server started, not picked up somewhere else.
 
 No extra library: the API already has what signs and checks its own
 sessions (python-jose) and what fetches (httpx).
@@ -17,6 +19,7 @@ sessions (python-jose) and what fetches (httpx).
 
 from __future__ import annotations
 
+import hmac
 import time
 
 import httpx
@@ -55,7 +58,12 @@ async def _keys(url: str, *, fresh: bool = False) -> dict[str, dict]:
 
 
 async def verify_id_token(
-    token: str, *, jwks_url: str, issuers: tuple[str, ...], audience: str
+    token: str,
+    *,
+    jwks_url: str,
+    issuers: tuple[str, ...],
+    audience: str,
+    nonce: str | None = None,
 ) -> dict:
     """The claims of ``token`` if everything above holds; else it refuses.
 
@@ -97,4 +105,8 @@ async def verify_id_token(
         raise CredentialRefused("unexpected issuer")
     if not claims.get("sub"):
         raise CredentialRefused("no subject")
+    if nonce is not None and not hmac.compare_digest(
+        str(claims.get("nonce") or ""), nonce
+    ):
+        raise CredentialRefused("nonce does not match")
     return claims

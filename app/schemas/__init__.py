@@ -10,6 +10,7 @@ from app.schemas.auth import (
     SignInMethodOut,
     SignInMethodsOut,
     SocialLoginIn,
+    SocialNonceOut,
     UserOut,
     VerifyOtpIn,
 )

@@ -170,6 +170,24 @@ Lo que se guarda aparte es **por dónde entra** la persona: una fila de
 - Administradores, cuentas de prueba y de código fijo entran **solo por
   correo** (403 `use_email`).
 - **No se guarda ninguna credencial** de Google, Facebook ni Apple.
+- Cómo se cree a cada red, y nada menos:
+  - **Google y Apple** dan una credencial firmada. La comprueba
+    `app/services/oidc.py` con la biblioteca de JWT del proyecto: firma
+    con las claves públicas de la dirección oficial de la red, algoritmo
+    fijo (RS256), emitida para nuestro identificador de cliente, por esa
+    red, sin caducar. No escribas criptografía a mano ni aceptes el
+    algoritmo que diga la credencial.
+  - **Apple** exige además el *nonce* de ese intento: la app lo pide en
+    `POST /auth/social/apple/nonce`, Apple lo escribe en la credencial y
+    vuelve con su `nonce_token`. Sin él no entra. Google lo comprueba si
+    llega. El nombre de Apple no va en la credencial: lo manda la app.
+  - **Facebook** no da una credencial firmada: se le pregunta
+    (`debug_token` con el secreto de la app, y `/me` firmado con
+    `appsecret_proof`) y solo vale si el testigo es válido **y es de
+    nuestra app**. Sin `FACEBOOK_APP_SECRET` no se ofrece. Su correo nunca
+    se da por verificado.
+- El registro no escribe la dirección de las peticiones salientes
+  (`httpx` en WARNING): alguna lleva credenciales. No lo bajes a INFO.
 
 ## Sesión: se entra una vez
 

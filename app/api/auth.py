@@ -57,6 +57,7 @@ from app.schemas import (
     MessageOut,
     RequestOtpIn,
     SocialLoginIn,
+    SocialNonceOut,
     VerifyOtpIn,
 )
 from app.security import create_access_token, hash_otp, verify_otp
@@ -85,9 +86,11 @@ from app.services.social import (
     SocialRefused,
     client_id,
     create_link_token,
+    create_nonce,
     enabled_providers,
     is_enabled,
     read_link_token,
+    read_nonce_token,
     verify_credential,
 )
 from app.services.sessions import close_all_sessions
@@ -740,6 +743,28 @@ def _use_email() -> HTTPException:
     )
 
 
+def _provider_on(provider: str) -> str:
+    provider = provider.strip().lower()
+    if provider not in SOCIAL_PROVIDERS or not is_enabled(provider):
+        raise _otp_error(
+            status.HTTP_404_NOT_FOUND, PROVIDER_DISABLED, "Aquesta xarxa no està activa."
+        )
+    return provider
+
+
+@router.post("/social/{provider}/nonce", response_model=SocialNonceOut)
+@limiter.limit(_otp_verify_limit)
+async def social_nonce(request: Request, provider: str):
+    """The nonce for one sign-in with a network (``app/services/social.py``).
+
+    The app asks for it before opening the network's window, gives ``nonce``
+    to the network and sends ``nonce_token`` back with the credential.
+    """
+    _provider_on(provider)
+    nonce, token = create_nonce()
+    return SocialNonceOut(nonce=nonce, nonce_token=token)
+
+
 @router.post("/social/{provider}", response_model=AuthOut)
 @limiter.limit(_otp_verify_limit)
 async def social_login(
@@ -764,13 +789,14 @@ async def social_login(
     With a session, it links the network to that account instead (409
     ``identifier_taken`` if it already opens another one).
     """
-    provider = provider.strip().lower()
-    if provider not in SOCIAL_PROVIDERS or not is_enabled(provider):
-        raise _otp_error(
-            status.HTTP_404_NOT_FOUND, PROVIDER_DISABLED, "Aquesta xarxa no està activa."
-        )
+    provider = _provider_on(provider)
     try:
-        profile = await verify_credential(provider, payload.credential)
+        nonce = None
+        if payload.nonce_token:
+            nonce = read_nonce_token(payload.nonce_token)
+            if nonce is None:
+                raise SocialRefused("the nonce of this sign-in is not valid")
+        profile = await verify_credential(provider, payload.credential, nonce)
     except SocialRefused:
         raise _otp_error(
             status.HTTP_401_UNAUTHORIZED,

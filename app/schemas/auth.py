@@ -30,9 +30,19 @@ class SocialLoginIn(BaseModel):
     invite_code: str | None = Field(default=None, max_length=32)
     postal_code: str | None = Field(default=None, max_length=10)
     terms_version: str | None = Field(default=None, max_length=16)
+    # What ``POST /auth/social/{provider}/nonce`` gave for this sign-in.
+    # Apple always needs it; the others check it when it comes.
+    nonce_token: str | None = Field(default=None, max_length=2048)
     # Apple gives the name only the first time, and to the app.
     first_name: str | None = Field(default=None, max_length=80)
     last_name: str | None = Field(default=None, max_length=120)
+
+
+class SocialNonceOut(BaseModel):
+    # Goes to the network, which writes it inside the credential.
+    nonce: str
+    # Comes back with the credential: proof the nonce is ours.
+    nonce_token: str
 
 
 class AuthProviderOut(BaseModel):

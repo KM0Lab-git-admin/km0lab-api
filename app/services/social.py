@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable
@@ -57,7 +58,8 @@ class SocialProfile:
 SocialRefused = CredentialRefused
 
 
-Verifier = Callable[[str], Awaitable[SocialProfile]]
+# (credential, the nonce this server issued for that sign-in or None).
+Verifier = Callable[[str, str | None], Awaitable[SocialProfile]]
 
 # provider -> verifier. A network without a verifier here cannot be
 # switched on, whatever the environment says.
@@ -107,8 +109,10 @@ def enabled_providers(platform: str | None = None) -> list[str]:
     return on
 
 
-async def verify_credential(provider: str, credential: str) -> SocialProfile:
-    profile = await VERIFIERS[provider](credential)
+async def verify_credential(
+    provider: str, credential: str, nonce: str | None = None
+) -> SocialProfile:
+    profile = await VERIFIERS[provider](credential, nonce)
     if not (profile.subject or "").strip():
         raise SocialRefused("no subject")
     return profile
@@ -123,12 +127,14 @@ GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs"
 GOOGLE_ISSUERS = ("accounts.google.com", "https://accounts.google.com")
 
 
-async def verify_google(credential: str) -> SocialProfile:
+async def verify_google(credential: str, nonce: str | None = None) -> SocialProfile:
     claims = await verify_id_token(
         credential,
         jwks_url=GOOGLE_JWKS_URL,
         issuers=GOOGLE_ISSUERS,
         audience=client_id(PROVIDER_GOOGLE),
+        # Checked when the app started the sign-in with one of ours.
+        nonce=nonce,
     )
     return SocialProfile(
         subject=str(claims["sub"]),
@@ -192,7 +198,7 @@ async def _ask_facebook(path: str, params: dict[str, str]) -> dict:
     return body if isinstance(body, dict) else {}
 
 
-async def verify_facebook(credential: str) -> SocialProfile:
+async def verify_facebook(credential: str, nonce: str | None = None) -> SocialProfile:
     settings = get_settings()
     app_id = client_id(PROVIDER_FACEBOOK)
     secret = (settings.facebook_app_secret or "").strip()
@@ -236,12 +242,96 @@ async def verify_facebook(credential: str) -> SocialProfile:
 VERIFIERS[PROVIDER_FACEBOOK] = verify_facebook
 
 
+# ── Apple ─────────────────────────────────────────────────────────────
+# "Sign in with Apple" hands the app an identity token, like Google's. What
+# Apple's documentation asks a server to check is what ``verify_id_token``
+# checks, **and the nonce**: here it is always required.
+#
+# - ``aud`` is our Services ID (``APPLE_CLIENT_ID``), the web's client id.
+# - The email is in the token on every sign-in; Apple says whether it has
+#   verified it, as a boolean or as text. It may be one of Apple's hidden
+#   addresses (``is_hidden_email``): it identifies nobody outside Apple and
+#   the person does not know it. Work & School accounts may bring none:
+#   then it is "your email is missing", like Facebook.
+# - The name is never in the token: Apple gives it to the app, once, and
+#   the app sends it along with the credential.
+# - The identity is ``sub``, never the email (Apple says so in as many
+#   words).
+
+APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys"
+APPLE_ISSUERS = ("https://appleid.apple.com",)
+
+
+async def verify_apple(credential: str, nonce: str | None = None) -> SocialProfile:
+    if not nonce:
+        raise SocialRefused("apple needs the nonce of this sign-in")
+    claims = await verify_id_token(
+        credential,
+        jwks_url=APPLE_JWKS_URL,
+        issuers=APPLE_ISSUERS,
+        audience=client_id(PROVIDER_APPLE),
+        nonce=nonce,
+    )
+    return SocialProfile(
+        subject=str(claims["sub"]),
+        email=claims.get("email") or None,
+        email_verified=claims.get("email_verified") in (True, "true"),
+    )
+
+
+VERIFIERS[PROVIDER_APPLE] = verify_apple
+
+
 # ── "Your email is missing" ───────────────────────────────────────────
 # A network may vouch for the person and give no email we can trust
 # (Facebook may give none). The account still needs one, so the person
 # types it and confirms it with the code. This short-lived token carries
 # who they proved to be in the network from one step to the other; it is
 # not a session (it has no ``sub``) and holds nothing of the network's.
+
+
+# ── The nonce of a sign-in ────────────────────────────────────────────
+# Before showing a network's window, the app asks for a nonce and gives it
+# to the network, which writes it inside the credential. Coming back, the
+# app sends the credential with the ``nonce_token`` it was given: proof
+# that this server issued that nonce, a few minutes ago. A credential made
+# for any other sign-in does not carry it. Nothing is stored.
+
+NONCE_PURPOSE = "social_nonce"
+NONCE_MINUTES = 10
+
+
+def create_nonce() -> tuple[str, str]:
+    """(nonce for the network, nonce_token for the way back)."""
+    settings = get_settings()
+    nonce = secrets.token_urlsafe(24)
+    now = datetime.now(timezone.utc)
+    token = jwt.encode(
+        {
+            "purpose": NONCE_PURPOSE,
+            "n": nonce,
+            "iat": now,
+            "exp": now + timedelta(minutes=NONCE_MINUTES),
+        },
+        settings.jwt_secret,
+        algorithm=settings.jwt_algorithm,
+    )
+    return nonce, token
+
+
+def read_nonce_token(token: str | None) -> str | None:
+    """The nonce inside, if the token is ours, of this kind and alive."""
+    settings = get_settings()
+    try:
+        claims = jwt.decode(
+            token or "", settings.jwt_secret, algorithms=[settings.jwt_algorithm]
+        )
+    except JWTError:
+        return None
+    nonce = claims.get("n")
+    if claims.get("purpose") != NONCE_PURPOSE or not isinstance(nonce, str) or not nonce:
+        return None
+    return nonce
 
 
 def create_link_token(provider: str, subject: str) -> str:

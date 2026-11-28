@@ -22,7 +22,7 @@ def cred(subject: str, email: str = "", verified: bool = True, name: str = "") -
     return f"credential|{subject}|{email}|{int(verified)}|{name}"
 
 
-async def _fake_network(credential: str) -> SocialProfile:
+async def _fake_network(credential: str, nonce: str | None = None) -> SocialProfile:
     kind, subject, email, verified, name = credential.split("|")
     if kind != "credential":
         raise SocialRefused("not ours")
