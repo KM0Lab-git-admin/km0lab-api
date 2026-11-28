@@ -60,6 +60,11 @@ from app.services.invitations import (
     convert_person_signup,
     record_event,
 )
+from app.services.identities import (
+    PROVIDER_EMAIL,
+    IdentityTaken,
+    ensure_identity,
+)
 from app.services.shop_review import user_out
 from app.services.slugs import allocate_user_slug
 from app.services.towns import (
@@ -208,6 +213,23 @@ async def _auth_out(
     )
 
 
+async def _came_in_by_email(db: AsyncSession, user: User) -> None:
+    """Note the door: the code sent to their email. Never stops a login."""
+    try:
+        await ensure_identity(
+            db, user, provider=PROVIDER_EMAIL, subject=user.email, email=user.email
+        )
+    except IdentityTaken:
+        logger.warning("Email identity of user %s belongs to another account", user.id)
+
+
+async def _fixed_code_out(db: AsyncSession, user: User) -> AuthOut:
+    """Accounts that get in with the fixed code also came in by email."""
+    await _came_in_by_email(db, user)
+    await db.commit()
+    return await _auth_out(db, user)
+
+
 @router.post("/request-otp", response_model=MessageOut)
 @limiter.limit(_otp_request_limit)
 async def request_otp(
@@ -327,14 +349,14 @@ async def verify_otp_endpoint(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Demo user not seeded — run: python -m scripts.seed_demo",
                 )
-            return await _auth_out(db, user)
+            return await _fixed_code_out(db, user)
         if is_malgrat_qa_email(email):
             if not user or user.is_fake:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Malgrat QA user not seeded — run: python -m scripts.seed",
                 )
-            return await _auth_out(db, user)
+            return await _fixed_code_out(db, user)
         if is_pilot_admin_email(email):
             # Never created here: only an account already registered as the
             # administrator of a real municipality may use the fixed code.
@@ -343,7 +365,7 @@ async def verify_otp_endpoint(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Pilot admin not registered — run: python -m scripts.add_admin",
                 )
-            return await _auth_out(db, user)
+            return await _fixed_code_out(db, user)
 
     # QA territory accounts: the fixed code was checked above and no OTP row
     # exists; from here on they follow the same path as any other signup.
@@ -489,6 +511,7 @@ async def verify_otp_endpoint(
         sync_user_fake_partition(user)
         # The app does not let anyone get here without ticking the box.
         accept_terms(user, payload.terms_version)
+        await _came_in_by_email(db, user)
 
     invite_code = (payload.invite_code or "").strip().lower() or (
         otp.invite_code if otp else None

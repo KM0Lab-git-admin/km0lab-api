@@ -41,6 +41,7 @@ from app.models import (
     TownMedia,
     TownPostalCode,
     User,
+    UserIdentity,
 )
 from app.qa import (
     QA_EMAIL_LIKE,
@@ -377,6 +378,10 @@ async def purge_qa_territory(
         )
     )
     await db.execute(delete(OtpCode).where(OtpCode.email.in_(emails)))
+    # MySQL would cascade; said out loud so every database does the same.
+    await db.execute(
+        delete(UserIdentity).where(UserIdentity.user_id.in_(user_ids))
+    )
     await db.execute(delete(User).where(User.id.in_(user_ids)))
 
     if shop_ids:

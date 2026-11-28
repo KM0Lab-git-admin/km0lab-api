@@ -8,17 +8,25 @@ from sqlalchemy.orm import selectinload
 from app.db import get_db
 from app.deps import require_admin
 from app.models import PointsTransaction, TownPostalCode, User
-from app.schemas import ResidentActivityOut, ResidentOut
+from app.schemas import IdentityOut, ResidentActivityOut, ResidentOut
+from app.services.identities import identities_of, is_hidden_email, origins_of
 from app.services.towns import load_user_with_town
 
 router = APIRouter(prefix="/residents", tags=["residents"])
 
 
-def _admin_resident_out(resident: User) -> ResidentOut:
-    """Admin always sees email; phone stays opt-in via contact_shared."""
+def _admin_resident_out(resident: User, origin=None) -> ResidentOut:
+    """Admin always sees email; phone stays opt-in via contact_shared.
+
+    ``origin`` is the identity the account was born with, if it has one.
+    """
     item = ResidentOut.model_validate(resident)
     item.email = resident.email
     item.phone = resident.phone if resident.contact_shared else None
+    item.email_hidden = is_hidden_email(resident.email)
+    if origin is not None:
+        item.signup_provider = origin.provider
+        item.signup_at = origin.created_at
     return item
 
 
@@ -51,7 +59,8 @@ async def list_residents(
         )
     stmt = stmt.order_by(User.created_at.desc())
     rows = (await db.execute(stmt)).scalars().unique().all()
-    return [_admin_resident_out(r) for r in rows]
+    origins = await origins_of(db, [r.id for r in rows])
+    return [_admin_resident_out(r, origins.get(r.id)) for r in rows]
 
 
 @router.get("/{resident_id}", response_model=ResidentOut)
@@ -69,7 +78,16 @@ async def get_resident(
         or resident.is_fake != user.is_fake
     ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Resident not found")
-    item = _admin_resident_out(resident)
+    doors = await identities_of(db, resident.id)
+    item = _admin_resident_out(
+        resident, next((d for d in doors if d.is_first), None)
+    )
+    item.identities = [
+        IdentityOut(
+            provider=d.provider, linked_at=d.created_at, last_used_at=d.last_used_at
+        )
+        for d in doors
+    ]
     if include_activity:
         txs = (
             await db.execute(

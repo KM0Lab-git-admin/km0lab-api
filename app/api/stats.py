@@ -10,6 +10,7 @@ from app.db import get_db
 from app.deps import require_admin, resolve_acting_shop
 from app.models import PointAction, Promotion, QrScan, Redemption, Shop, TownPostalCode, User
 from app.schemas import AdminStatsOut, MerchantStatsOut
+from app.services.identities import signups_by_provider
 
 router = APIRouter(prefix="/stats", tags=["stats"])
 
@@ -93,6 +94,9 @@ async def admin_stats(
         redemptions_this_month=redemptions_this_month,
         active_actions=active_actions,
         total_actions=total_actions,
+        signups_by_provider=await signups_by_provider(
+            db, town_id=town_id, is_fake=user.is_fake
+        ),
     )
 
 

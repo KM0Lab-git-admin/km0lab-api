@@ -314,6 +314,37 @@ class OtpCode(Base):
     )
 
 
+class UserIdentity(Base):
+    """One way a person gets into their account (``app/services/identities.py``).
+
+    ``provider`` is ``email_code`` (the code sent by email), ``google``,
+    ``facebook`` or ``apple``; ``subject`` is who the person is there (the
+    email in lower case, or the provider's stable id). The identity the
+    account was born with has ``is_first``.
+    """
+
+    __tablename__ = "user_identities"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider", "subject", name="uq_user_identity_provider_subject"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    provider: Mapped[str] = mapped_column(String(20))
+    subject: Mapped[str] = mapped_column(String(255))
+    # The email that door handed over, if any (Apple's may be a hidden one).
+    email: Mapped[str | None] = mapped_column(String(255), default=None)
+    is_first: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+
+
 # ── Shops & promotions ────────────────────────────────────────────────
 
 

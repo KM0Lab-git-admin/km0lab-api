@@ -7,6 +7,8 @@ class AdminStatsOut(BaseModel):
     redemptions_this_month: int
     active_actions: int
     total_actions: int
+    # Residents by the door their account was born with.
+    signups_by_provider: dict[str, int] = {}
 
 
 class MerchantStatsOut(BaseModel):

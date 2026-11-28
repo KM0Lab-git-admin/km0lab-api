@@ -23,7 +23,8 @@ class Settings(BaseSettings):
     # JWT
     jwt_secret: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
-    jwt_expire_minutes: int = 60 * 24 * 30  # 30 días
+    # Cuánto dura la sesión. Sin renovación: al caducar se vuelve a entrar.
+    jwt_expire_minutes: int = 60 * 24 * 90  # 90 días
 
     # OTP
     otp_ttl_minutes: int = 10

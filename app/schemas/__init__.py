@@ -34,7 +34,7 @@ from app.schemas.redemptions import (
 )
 from app.schemas.payments import ShopDebtOut, ShopPaymentCreate, ShopPaymentOut
 from app.schemas.scans import ScanIn, ScanOut
-from app.schemas.residents import ResidentOut, ResidentActivityOut
+from app.schemas.residents import IdentityOut, ResidentOut, ResidentActivityOut
 from app.schemas.stats import AdminStatsOut, MerchantStatsOut
 from app.schemas.points import ClaimPointsOut, PointsHistoryItem, PointsHistoryOut
 
