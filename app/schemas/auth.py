@@ -19,6 +19,47 @@ class VerifyOtpIn(BaseModel):
     invite_code: str | None = Field(default=None, max_length=32)
     postal_code: str | None = Field(default=None, max_length=10)
     terms_version: str | None = Field(default=None, max_length=16)
+    # After "your email is missing": who the person proved to be in a
+    # social network, to link it to the account this code opens.
+    link_token: str | None = Field(default=None, max_length=2048)
+
+
+class SocialLoginIn(BaseModel):
+    # What the network handed the app: verified here, never stored.
+    credential: str = Field(min_length=10, max_length=8192)
+    invite_code: str | None = Field(default=None, max_length=32)
+    postal_code: str | None = Field(default=None, max_length=10)
+    terms_version: str | None = Field(default=None, max_length=16)
+    # Apple gives the name only the first time, and to the app.
+    first_name: str | None = Field(default=None, max_length=80)
+    last_name: str | None = Field(default=None, max_length=120)
+
+
+class AuthProviderOut(BaseModel):
+    provider: str  # google | facebook | apple
+    # Public id of our app in that network: the button needs it.
+    client_id: str
+
+
+class AuthProvidersOut(BaseModel):
+    providers: list[AuthProviderOut] = []
+
+
+class SignInMethodOut(BaseModel):
+    provider: str  # email_code | google | facebook | apple
+    linked_at: datetime
+    last_used_at: datetime | None = None
+
+
+class SignInMethodsOut(BaseModel):
+    """How this person gets into their account (their own view)."""
+
+    # The door the account was born with; null if it never logged in.
+    created_with: str | None = None
+    email: str
+    # One of Apple's hidden emails: the person does not know it.
+    email_hidden: bool = False
+    methods: list[SignInMethodOut] = []
 
 
 class ShopRequestOut(BaseModel):

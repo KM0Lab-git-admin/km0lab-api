@@ -139,6 +139,38 @@ Reglas:
 - `/users/me` y el login devuelven `shop_request` (`review` o `rejected`,
   con `reason` si fue rechazada).
 
+## Cómo entra cada cuenta
+
+Una cuenta sigue siendo **un correo** (`users.email`, único y obligatorio).
+Lo que se guarda aparte es **por dónde entra** la persona: una fila de
+`user_identities` por puerta (`app/services/identities.py`).
+
+- Puertas: `email_code` (el código por correo), `google`, `facebook`,
+  `apple`. La primera que usó la cuenta es su **origen** (`is_first`) y no
+  cambia al enlazar otra. El administrador lo ve en la ficha del vecino y,
+  agregado, en `/stats/admin` (`signups_by_provider`). La cifra de todos
+  los municipios: `python -m scripts.identities_report` (solo lee).
+- **Una red es un verificador pequeño** (`app/services/social.py`,
+  `VERIFIERS`): recibe la credencial que la red dio a la app y dice quién
+  es esa persona allí. Todo lo demás (crear la cuenta, condiciones, aforo,
+  invitación, comercio en espera) es el mismo camino que el código por
+  correo: `_sign_in` en `app/api/auth.py`. No dupliques ese camino.
+- **Encender una red no es desplegar:** se ofrece cuando está en
+  `AUTH_PROVIDERS`, tiene su `<RED>_CLIENT_ID` y tiene verificador.
+  `GET /auth/providers` dice a la app qué botones enseñar según la
+  plataforma (web: las encendidas; app Android: ninguna; iPhone: Apple).
+- **Solo un correo verificado abre una cuenta que ya existe.** Si la red no
+  da correo o no lo garantiza, `POST /auth/social/{red}` contesta 409
+  `email_missing` con un `link_token` de 15 minutos; la persona confirma un
+  correo con el código y `verify-otp` enlaza la red. Nunca se inventa un
+  correo ni se une una cuenta por un correo sin verificar.
+- Una puerta que ya abre una cuenta **no se mueve** a otra (409
+  `identifier_taken`). Con sesión abierta, la misma llamada enlaza la red a
+  esa cuenta.
+- Administradores, cuentas de prueba y de código fijo entran **solo por
+  correo** (403 `use_email`).
+- **No se guarda ninguna credencial** de Google, Facebook ni Apple.
+
 ## Catálogo de premios
 
 El catálogo es **uno y el mismo para todos los municipios**. Se edita en un

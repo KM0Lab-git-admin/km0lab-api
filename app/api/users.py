@@ -8,7 +8,13 @@ from app.db import get_db
 from app.deps import get_current_user
 from app.qa import is_qa_email, is_qa_postal_code
 from app.models import User
-from app.schemas import UpdateUserIn, UserOut
+from app.schemas import (
+    SignInMethodOut,
+    SignInMethodsOut,
+    UpdateUserIn,
+    UserOut,
+)
+from app.services.identities import identities_of, is_hidden_email
 from app.services.slugs import allocate_user_slug
 from app.services.capacity import accept_terms
 from app.services.residency import move_resident
@@ -25,6 +31,26 @@ async def get_me(
     db: AsyncSession = Depends(get_db),
 ):
     return await user_out(db, user)
+
+
+@router.get("/me/sign-in-methods", response_model=SignInMethodsOut)
+async def my_sign_in_methods(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """How I get into my account: the door it was born with and the rest."""
+    doors = await identities_of(db, user.id)
+    return SignInMethodsOut(
+        created_with=next((d.provider for d in doors if d.is_first), None),
+        email=user.email,
+        email_hidden=is_hidden_email(user.email),
+        methods=[
+            SignInMethodOut(
+                provider=d.provider, linked_at=d.created_at, last_used_at=d.last_used_at
+            )
+            for d in doors
+        ],
+    )
 
 
 @router.patch("/me", response_model=UserOut)

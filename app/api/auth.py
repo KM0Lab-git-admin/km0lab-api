@@ -16,12 +16,13 @@ import secrets
 import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db import get_db
+from app.deps import get_optional_user
 from app.demo import (
     DEMO_CODE,
     demo_enabled,
@@ -44,7 +45,15 @@ from app.roles import (
     IncompatibleRolesError,
     flags_from_roles,
 )
-from app.schemas import AuthOut, MessageOut, RequestOtpIn, VerifyOtpIn
+from app.schemas import (
+    AuthOut,
+    AuthProviderOut,
+    AuthProvidersOut,
+    MessageOut,
+    RequestOtpIn,
+    SocialLoginIn,
+    VerifyOtpIn,
+)
 from app.security import create_access_token, hash_otp, verify_otp
 from app.services.action_grants import grant_signup_points
 from app.services.capacity import (
@@ -62,8 +71,19 @@ from app.services.invitations import (
 )
 from app.services.identities import (
     PROVIDER_EMAIL,
+    SOCIAL_PROVIDERS,
     IdentityTaken,
     ensure_identity,
+    find_identity,
+)
+from app.services.social import (
+    SocialRefused,
+    client_id,
+    create_link_token,
+    enabled_providers,
+    is_enabled,
+    read_link_token,
+    verify_credential,
 )
 from app.services.shop_review import user_out
 from app.services.slugs import allocate_user_slug
@@ -100,6 +120,13 @@ OTP_INVALID = "otp_invalid"
 OTP_EXPIRED = "otp_expired"
 OTP_TOO_MANY_ATTEMPTS = "otp_too_many_attempts"
 OTP_SEND_FAILED = "otp_send_failed"
+# Social networks (app/services/social.py).
+PROVIDER_DISABLED = "provider_disabled"
+PROVIDER_FAILED = "provider_failed"
+EMAIL_MISSING = "email_missing"
+IDENTIFIER_TAKEN = "identifier_taken"
+USE_EMAIL = "use_email"
+LINK_EXPIRED = "link_expired"
 
 
 def _otp_error(status_code: int, code: str, message: str) -> HTTPException:
@@ -221,6 +248,40 @@ async def _came_in_by_email(db: AsyncSession, user: User) -> None:
         )
     except IdentityTaken:
         logger.warning("Email identity of user %s belongs to another account", user.id)
+
+
+def _taken() -> HTTPException:
+    return _otp_error(
+        status.HTTP_409_CONFLICT,
+        IDENTIFIER_TAKEN,
+        "Aquesta xarxa ja entra en un altre compte.",
+    )
+
+
+async def _note_doors(
+    db: AsyncSession,
+    user: User,
+    *,
+    door: tuple[str, str],
+    also: tuple[str, str] | None = None,
+    door_email: str | None = None,
+) -> None:
+    """Note how the person came in. A network proved a moment ago goes
+    first, so it is the origin of an account being born now."""
+    if also is not None:
+        try:
+            await ensure_identity(db, user, provider=also[0], subject=also[1])
+        except IdentityTaken:
+            raise _taken() from None
+    if door[0] == PROVIDER_EMAIL:
+        await _came_in_by_email(db, user)
+        return
+    try:
+        await ensure_identity(
+            db, user, provider=door[0], subject=door[1], email=door_email
+        )
+    except IdentityTaken:
+        raise _taken() from None
 
 
 async def _fixed_code_out(db: AsyncSession, user: User) -> AuthOut:
@@ -367,6 +428,18 @@ async def verify_otp_endpoint(
                 )
             return await _fixed_code_out(db, user)
 
+    # A network proved a moment ago, waiting for an email ("your email is
+    # missing"). Checked before the code is spent: a dead token costs nothing.
+    also = None
+    if payload.link_token:
+        also = read_link_token(payload.link_token)
+        if also is None:
+            raise _otp_error(
+                status.HTTP_400_BAD_REQUEST,
+                LINK_EXPIRED,
+                "Ha passat massa temps. Torna a entrar amb la xarxa.",
+            )
+
     # QA territory accounts: the fixed code was checked above and no OTP row
     # exists; from here on they follow the same path as any other signup.
     qa_account = is_qa_email(email)
@@ -438,9 +511,49 @@ async def verify_otp_endpoint(
             .values(consumed=1)
         )
 
-    user = (
-        await db.execute(select(User).where(User.email == email))
-    ).scalars().first()
+    return await _sign_in(
+        db,
+        email=email,
+        door=(PROVIDER_EMAIL, email),
+        also=also,
+        postal_code=payload.postal_code,
+        invite_code=(payload.invite_code or "").strip().lower()
+        or (otp.invite_code if otp else None),
+        terms_version=payload.terms_version,
+        qa_postal=qa_postal,
+    )
+
+
+async def _sign_in(
+    db: AsyncSession,
+    *,
+    email: str,
+    door: tuple[str, str],
+    postal_code: str | None,
+    invite_code: str | None,
+    terms_version: str | None,
+    also: tuple[str, str] | None = None,
+    qa_postal=None,
+    names: tuple[str | None, str | None] = (None, None),
+    door_email: str | None = None,
+    account: User | None = None,
+) -> AuthOut:
+    """Let the owner of ``email`` in, creating the account if there is none.
+
+    The caller has already proved the person is who they say: with the code
+    sent to that email, or with a social network that vouches for it.
+    ``door`` is (provider, subject) of how they came in now and
+    ``door_email`` the email that door handed over. ``also`` is a network
+    they proved a moment ago and gave no email ("your email is missing"):
+    it is linked here, and it is the origin of an account born now.
+    ``account`` is the account, when the caller already found it.
+    """
+    qa_account = is_qa_email(email)
+    user = account
+    if user is None:
+        user = (
+            await db.execute(select(User).where(User.email == email))
+        ).scalars().first()
     is_new = user is None
     grant_welcome = False
 
@@ -485,7 +598,7 @@ async def verify_otp_endpoint(
         # The authoritative check, with the municipality's row locked: two
         # people cannot both take the last place. Nothing has been written
         # yet, so the code stays usable if a place opens.
-        if await _would_overflow(db, email, payload.postal_code, lock=True):
+        if await _would_overflow(db, email, postal_code, lock=True):
             raise _pilot_full()
         user = User(
             email=email,
@@ -505,17 +618,18 @@ async def verify_otp_endpoint(
                 user.postal_code = qa_postal.postal_code
                 user.postal_ref = qa_postal
         else:
-            await apply_invitee_postal_code(db, user, payload.postal_code)
+            await apply_invitee_postal_code(db, user, postal_code)
         # Settle the partition before granting points, so the welcome bonus
         # and its ledger row land on the same side as the user.
         sync_user_fake_partition(user)
         # The app does not let anyone get here without ticking the box.
-        accept_terms(user, payload.terms_version)
-        await _came_in_by_email(db, user)
-
-    invite_code = (payload.invite_code or "").strip().lower() or (
-        otp.invite_code if otp else None
-    )
+        accept_terms(user, terms_version)
+        if is_new and not user.first_name and not user.last_name:
+            user.first_name, user.last_name = (
+                (names[0] or "").strip() or None,
+                (names[1] or "").strip() or None,
+            )
+        await _note_doors(db, user, door=door, also=also, door_email=door_email)
 
     points_awarded: int | None = None
     points_award_message: str | None = None
@@ -533,4 +647,129 @@ async def verify_otp_endpoint(
         user,
         points_awarded=points_awarded,
         points_award_message=points_award_message,
+    )
+
+
+# ── Social networks ───────────────────────────────────────────────────
+
+
+@router.get("/providers", response_model=AuthProvidersOut)
+async def auth_providers(
+    x_app_platform: str | None = Header(default=None, alias="X-App-Platform"),
+):
+    """The networks to offer next to the email, for the platform that asks.
+
+    The app shows only these buttons, so a network is switched on from the
+    environment without publishing the app. Empty = email only.
+    """
+    return AuthProvidersOut(
+        providers=[
+            AuthProviderOut(provider=p, client_id=client_id(p))
+            for p in enabled_providers(x_app_platform)
+        ]
+    )
+
+
+def _use_email() -> HTTPException:
+    return _otp_error(
+        status.HTTP_403_FORBIDDEN, USE_EMAIL, "Aquest compte entra amb el correu."
+    )
+
+
+@router.post("/social/{provider}", response_model=AuthOut)
+@limiter.limit(_otp_verify_limit)
+async def social_login(
+    request: Request,
+    provider: str,
+    payload: SocialLoginIn,
+    current: User | None = Depends(get_optional_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get in with a social network, or link one to the account in session.
+
+    The network vouches for who the person is (``app/services/social.py``).
+    From there it is the same way in as the code by email:
+
+    - the network is already linked to an account: that account;
+    - if not, and the network gives a **verified** email: the account with
+      that email, or a new one;
+    - with no email we can trust: 409 ``email_missing`` and a short-lived
+      ``link_token``; the person types an email, confirms it with the code
+      and ``verify-otp`` links the network (send it as ``link_token``).
+
+    With a session, it links the network to that account instead (409
+    ``identifier_taken`` if it already opens another one).
+    """
+    provider = provider.strip().lower()
+    if provider not in SOCIAL_PROVIDERS or not is_enabled(provider):
+        raise _otp_error(
+            status.HTTP_404_NOT_FOUND, PROVIDER_DISABLED, "Aquesta xarxa no està activa."
+        )
+    try:
+        profile = await verify_credential(provider, payload.credential)
+    except SocialRefused:
+        raise _otp_error(
+            status.HTTP_401_UNAUTHORIZED,
+            PROVIDER_FAILED,
+            "No hem pogut entrar amb aquesta xarxa.",
+        ) from None
+    except Exception:
+        logger.exception("Social sign-in with %s failed", provider)
+        raise _otp_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            PROVIDER_FAILED,
+            "No hem pogut entrar amb aquesta xarxa.",
+        ) from None
+    door = (provider, profile.subject.strip())
+
+    def _email_only(email: str, user: User | None) -> bool:
+        # Test and fixed-code accounts, and administrators, get in by email.
+        return (
+            is_fixed_otp_email(email)
+            or is_qa_email(email)
+            or (user is not None and user.has_role(ROLE_ADMIN))
+        )
+
+    # With a session: link this network to that account.
+    if current is not None:
+        if _email_only(current.email, current):
+            raise _use_email()
+        await _note_doors(db, current, door=door, door_email=profile.email)
+        await db.commit()
+        return await _auth_out(db, current)
+
+    known = await find_identity(db, *door)
+    if known is not None:
+        owner = await load_user_with_town(db, known.user_id)
+        email = owner.email.lower()
+    elif profile.email and profile.email_verified:
+        email = profile.email.strip().lower()
+        owner = (
+            await db.execute(select(User).where(User.email == email))
+        ).scalars().first()
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": EMAIL_MISSING,
+                "message": "Falta el teu correu.",
+                "link_token": create_link_token(*door),
+            },
+        )
+    if _email_only(email, owner):
+        raise _use_email()
+
+    return await _sign_in(
+        db,
+        email=email,
+        door=door,
+        postal_code=payload.postal_code,
+        invite_code=(payload.invite_code or "").strip().lower() or None,
+        terms_version=payload.terms_version,
+        names=(
+            payload.first_name or profile.first_name,
+            payload.last_name or profile.last_name,
+        ),
+        door_email=profile.email,
+        account=owner,
     )

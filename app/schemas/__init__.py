@@ -1,7 +1,18 @@
 """Pydantic schemas package — API contract (English field names)."""
 
 from app.schemas.users import UpdateUserIn
-from app.schemas.auth import AuthOut, MessageOut, RequestOtpIn, VerifyOtpIn, UserOut
+from app.schemas.auth import (
+    AuthOut,
+    AuthProviderOut,
+    AuthProvidersOut,
+    MessageOut,
+    RequestOtpIn,
+    SignInMethodOut,
+    SignInMethodsOut,
+    SocialLoginIn,
+    UserOut,
+    VerifyOtpIn,
+)
 from app.schemas.towns import (
     TownOut,
     TownPublicOut,

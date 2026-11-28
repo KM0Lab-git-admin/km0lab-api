@@ -71,6 +71,14 @@ class Settings(BaseSettings):
     # gets when it is registered; empty = that email is not sent.
     backoffice_url: str = ""
 
+    # Entrar con una red social (app/services/social.py). Una red se
+    # ofrece cuando está en AUTH_PROVIDERS (p. ej. "google,apple") y tiene
+    # aquí su identificador de cliente, que es público. Vacío = apagada.
+    auth_providers: str = ""
+    google_client_id: str = ""
+    facebook_client_id: str = ""
+    apple_client_id: str = ""
+
     # OpenAI — used to auto-fill missing i18n languages on save.
     # If empty, the API copies the source text into empty languages.
     openai_api_key: str = ""
