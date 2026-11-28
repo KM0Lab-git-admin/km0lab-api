@@ -16,6 +16,7 @@ from sqlalchemy import select
 from app.config import get_settings
 from app.models import User
 from app.services import oidc
+from app.services.capacity import CURRENT_TERMS_VERSION
 from app.services.social import (
     APPLE_JWKS_URL,
     SocialRefused,
@@ -213,7 +214,7 @@ async def test_getting_in_with_apple_end_to_end(client, db_session, apple):
             "credential": token(start["nonce"], email=HIDDEN, is_private_email="true"),
             "nonce_token": start["nonce_token"],
             "postal_code": "08380",
-            "terms_version": "1",
+            "terms_version": CURRENT_TERMS_VERSION,
             # Apple gives the name to the app, the first time only.
             "first_name": "Marta",
             "last_name": "Puig",
@@ -223,7 +224,7 @@ async def test_getting_in_with_apple_end_to_end(client, db_session, apple):
     body = r.json()
     user = body["user"]
     assert user["email"] == HIDDEN and (user["first_name"], user["last_name"]) == ("Marta", "Puig")
-    assert user["terms_version"] == "1" and body["points_awarded"]
+    assert user["terms_version"] == CURRENT_TERMS_VERSION and body["points_awarded"]
 
     # Her card says she came in by Apple and that her email is a hidden one.
     card = (await client.get(f"{API}/residents/{user['id']}", headers=admin)).json()

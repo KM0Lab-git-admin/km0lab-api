@@ -1,6 +1,8 @@
 """A municipality admits a limited number of accounts, and each account
 keeps proof of the terms it accepted (``app/services/capacity.py``)."""
 
+from datetime import datetime
+
 import pytest
 from sqlalchemy import select
 
@@ -212,14 +214,14 @@ async def test_a_new_account_keeps_what_it_accepted_and_when(
     await malgrat(db_session)
     await db_session.commit()
 
-    r = await _enter(client, capture_otp, "vei@test.cat", terms_version="1")
+    r = await _enter(client, capture_otp, "vei@test.cat", terms_version=CURRENT_TERMS_VERSION)
 
     user = r.json()["user"]
-    assert user["terms_version"] == CURRENT_TERMS_VERSION == "1"
+    assert user["terms_version"] == CURRENT_TERMS_VERSION == "2"
     assert user["terms_accepted_at"] is not None
 
     # Logging in again does not move the date.
-    again = await _enter(client, capture_otp, "vei@test.cat", terms_version="1")
+    again = await _enter(client, capture_otp, "vei@test.cat", terms_version=CURRENT_TERMS_VERSION)
     assert again.json()["user"]["terms_accepted_at"] == user["terms_accepted_at"]
 
 
@@ -240,6 +242,34 @@ async def test_an_app_that_sends_no_version_records_nothing(
     # A version that is not the one in force proves nothing.
     r = await client.patch(f"{API}/users/me", headers=headers, json={"terms_version": "0"})
     assert r.json()["terms_version"] is None
+    r = await client.patch(f"{API}/users/me", headers=headers, json={"terms_version": CURRENT_TERMS_VERSION})
+    assert r.json()["terms_version"] == CURRENT_TERMS_VERSION
+    assert r.json()["terms_accepted_at"] is not None
+
+
+async def test_whoever_accepted_the_previous_version_accepts_the_new_one_once(
+    client, db_session, capture_otp
+):
+    """The terms went from version 1 to 2 (28-11-2026): the old acceptance
+    stays on record until the person accepts the new text, once."""
+    await malgrat(db_session)
+    await db_session.commit()
+    r = await _enter(client, capture_otp, "vei@test.cat")
+    headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    user = await db_session.get(User, r.json()["user"]["id"])
+    user.terms_version = "1"
+    user.terms_accepted_at = datetime(2026, 11, 27, 9, 0, 0)
+    await db_session.commit()
+
+    me = (await client.get(f"{API}/users/me", headers=headers)).json()
+    assert me["terms_version"] == "1"
+    # An app that still sends the old version changes nothing.
     r = await client.patch(f"{API}/users/me", headers=headers, json={"terms_version": "1"})
     assert r.json()["terms_version"] == "1"
-    assert r.json()["terms_accepted_at"] is not None
+    assert r.json()["terms_accepted_at"].startswith("2026-11-27T09:00:00")
+
+    r = await client.patch(
+        f"{API}/users/me", headers=headers, json={"terms_version": CURRENT_TERMS_VERSION}
+    )
+    assert r.json()["terms_version"] == CURRENT_TERMS_VERSION
+    assert not r.json()["terms_accepted_at"].startswith("2026-11-27T09:00:00")

@@ -16,6 +16,7 @@ from sqlalchemy import select
 from app.config import get_settings
 from app.models import User
 from app.services import oidc
+from app.services.capacity import CURRENT_TERMS_VERSION
 from app.services.social import GOOGLE_JWKS_URL, SocialRefused, verify_google
 from tests._municipalities import API, malgrat
 
@@ -165,12 +166,12 @@ async def test_getting_in_with_google_end_to_end(client, db_session, google):
 
     r = await client.post(
         f"{API}/auth/social/google",
-        json={"credential": token(), "postal_code": "08380", "terms_version": "1"},
+        json={"credential": token(), "postal_code": "08380", "terms_version": CURRENT_TERMS_VERSION},
     )
     assert r.status_code == 200, r.text
     user = r.json()["user"]
     assert user["email"] == "marta@gmail.com" and user["first_name"] == "Marta"
-    assert user["town_name"] == "Malgrat de Mar" and user["terms_version"] == "1"
+    assert user["town_name"] == "Malgrat de Mar" and user["terms_version"] == CURRENT_TERMS_VERSION
 
     # A token for another app, or a forged one, opens nothing.
     for bad in (token(aud="another-app"), token(private=OTHER_PRIVATE, email="pere@gmail.com")):

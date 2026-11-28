@@ -30,7 +30,7 @@ PILOT_FULL_MESSAGE = "El pilot d'aquesta població està complet."
 
 # The version of the pilot terms and the privacy policy in force. Raising it
 # makes every account accept once more.
-CURRENT_TERMS_VERSION = "1"
+CURRENT_TERMS_VERSION = "2"
 
 
 async def residents_count(db: AsyncSession, town_id: str) -> int:
