@@ -4,14 +4,14 @@ The session renews itself with use, lasts a year without it, and can be
 closed from the server.
 """
 
-import logging
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from jose import jwt
+from sqlalchemy import select
 
 from app.config import Settings, get_settings
-from app.models import User
+from app.models import PointsTransaction, User, UserIdentity
 from app.roles import flags_from_roles
 from app.services.sessions import (
     EXAMPLE_JWT_SECRET,
@@ -217,21 +217,53 @@ async def test_sessions_from_before_keep_working(client, db_session):
 # ── The key that signs them ───────────────────────────────────────────
 
 
-def test_production_does_not_start_on_the_example_key(caplog):
+def test_only_a_laptop_starts_on_the_example_key():
     def settings(environment: str, secret: str) -> Settings:
         return Settings(environment=environment, jwt_secret=secret)
 
-    # With its own key, every environment starts.
-    for env in ("development", "staging", "production"):
-        check_signing_key(settings(env, "a-long-random-key-of-this-environment"))
-    # Local development runs on the example.
-    check_signing_key(settings("development", EXAMPLE_JWT_SECRET))
+    laptop: dict[str, str] = {}
+    railway = {"RAILWAY_ENVIRONMENT_NAME": "production", "RAILWAY_PROJECT_ID": "abc"}
 
-    # Where real people sign in, the example key forges anybody's session.
-    for env in ("production", "prod", "anything-else"):
-        with pytest.raises(RuntimeError, match="JWT_SECRET"):
-            check_signing_key(settings(env, EXAMPLE_JWT_SECRET))
-    # UAT starts, and says so as loudly as a log can.
-    with caplog.at_level(logging.CRITICAL, logger="km0lab-api.sessions"):
-        check_signing_key(settings("staging", EXAMPLE_JWT_SECRET))
-    assert "JWT_SECRET" in caplog.text
+    # With its own key, everything starts, wherever it runs.
+    for env in ("development", "staging", "production"):
+        for where in (laptop, railway):
+            check_signing_key(settings(env, "a-long-random-key-of-its-own"), where)
+    # Local development runs on the example.
+    check_signing_key(settings("development", EXAMPLE_JWT_SECRET), laptop)
+
+    # Anything that is not local development refuses, and says what to do.
+    for env in ("staging", "production", "prod", "anything-else"):
+        with pytest.raises(RuntimeError, match="JWT_SECRET is missing"):
+            check_signing_key(settings(env, EXAMPLE_JWT_SECRET), laptop)
+    # UAT calls itself "development" and runs on Railway: it refuses too.
+    with pytest.raises(RuntimeError, match="Add a variable JWT_SECRET"):
+        check_signing_key(settings("development", EXAMPLE_JWT_SECRET), railway)
+
+
+async def test_a_deleted_account_takes_its_sessions_with_it(client, capture_otp, db_session):
+    await malgrat(db_session)
+    await db_session.commit()
+    marta = await _enter(client, capture_otp, "marta@test.cat")
+    token = _bearer(marta["access_token"])
+    assert (await client.get(f"{API}/users/me", headers=token)).status_code == 200
+
+    user = await db_session.get(User, marta["user"]["id"])
+    for row in (
+        await db_session.execute(
+            select(UserIdentity).where(UserIdentity.user_id == user.id)
+        )
+    ).scalars():
+        await db_session.delete(row)
+    for row in (
+        await db_session.execute(
+            select(PointsTransaction).where(PointsTransaction.user_id == user.id)
+        )
+    ).scalars():
+        await db_session.delete(row)
+    await db_session.delete(user)
+    await db_session.commit()
+
+    # Valid for a year on paper; worth nothing without the account.
+    r = await client.get(f"{API}/users/me", headers=token)
+    assert r.status_code == 401 and r.json()["detail"] == "User not found"
+    assert (await client.post(f"{API}/auth/renew", headers=token)).status_code == 401

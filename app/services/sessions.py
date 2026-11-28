@@ -25,12 +25,11 @@ accounts: changing it signs everybody out at once.
 
 from __future__ import annotations
 
-import logging
+import os
+from typing import Mapping
 
 from app.config import Settings
 from app.models import User
-
-logger = logging.getLogger("km0lab-api.sessions")
 
 # The value the code ships with and .env.example shows. It is public.
 EXAMPLE_JWT_SECRET = "change-me-in-production"
@@ -55,24 +54,40 @@ def close_all_sessions(user: User) -> None:
     user.session_epoch = int(user.session_epoch or 0) + 1
 
 
-def check_signing_key(settings: Settings) -> None:
-    """Refuse to run on the public example key where real people sign in.
+# Railway puts these in every service it runs. UAT declares itself
+# ``development`` and still is a deployment where real people sign in, so
+# the environment's name alone does not say "this is somebody's laptop".
+DEPLOYMENT_MARKERS = (
+    "RAILWAY_ENVIRONMENT_NAME",
+    "RAILWAY_ENVIRONMENT",
+    "RAILWAY_PROJECT_ID",
+    "RAILWAY_SERVICE_ID",
+)
+
+
+def is_deployed(environ: Mapping[str, str] | None = None) -> bool:
+    environ = os.environ if environ is None else environ
+    return any((environ.get(name) or "").strip() for name in DEPLOYMENT_MARKERS)
+
+
+def check_signing_key(
+    settings: Settings, environ: Mapping[str, str] | None = None
+) -> None:
+    """Refuse to run on the public example key anywhere but a laptop.
 
     With the example key anybody can write a valid session for any account.
-    In production the API does not start. In staging (UAT, where the pilot
-    runs today) it starts and says so as loudly as a log can; in local
-    development it is what everybody uses.
+    The API only starts on it in local development: an environment called
+    ``development`` that is not running on Railway. Everywhere else it
+    stops at start-up and says what is missing.
     """
     if settings.jwt_secret != EXAMPLE_JWT_SECRET:
         return
     env = settings.environment.lower().strip()
-    if env == "development":
+    if env == "development" and not is_deployed(environ):
         return
-    message = (
-        "JWT_SECRET is the public example value: anybody can forge a session "
-        "for any account. Set a long random one in this environment."
+    raise RuntimeError(
+        "JWT_SECRET is missing: this environment is signing sessions with the "
+        "public example value, and anybody could forge a session for any "
+        "account. Add a variable JWT_SECRET with a long random value of its "
+        "own (and never change it afterwards: changing it signs everybody out)."
     )
-    if env == "staging":
-        logger.critical(message)
-        return
-    raise RuntimeError(message)

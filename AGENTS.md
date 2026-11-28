@@ -209,8 +209,9 @@ Quien usa la App o el panel **no vuelve a identificarse**
   `--apply` solo enseña). No se puede cerrar un solo dispositivo.
 - **`JWT_SECRET` no se cambia nunca** cuando ya hay cuentas de verdad:
   cambiarlo cierra la sesión de todo el mundo. Cada entorno tiene la suya.
-  Con el valor de ejemplo la API **no arranca** en producción y lo avisa
-  en el registro en UAT.
+  Con el valor de ejemplo la API **solo arranca en un portátil**: se
+  niega en cualquier entorno que no se llame `development` y también
+  en Railway aunque se llame así (UAT se declara `development`).
 - Una credencial emitida antes de existir el contador vale como 0: nadie
   sale al publicar esto.
 
