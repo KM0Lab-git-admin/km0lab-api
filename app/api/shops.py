@@ -874,10 +874,11 @@ async def update_shop(
     assert_town_scope(user, shop.town_id)
     default_lang = await _default_lang_for_shop(db, shop)
     data = payload.model_dump(exclude_unset=True)
-    if shop.status in (SHOP_REVIEW, SHOP_REJECTED) and data.get("status") not in (
-        None,
-        shop.status,
-    ):
+    if shop.status == SHOP_REJECTED:
+        # Left as it was until it is deleted: the 30 days count from the
+        # rejection, and any edit would move that date.
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="shop_rejected")
+    if shop.status == SHOP_REVIEW and data.get("status") not in (None, SHOP_REVIEW):
         # Switching it on from here would skip the validation, its QR, its
         # owner and the emails.
         raise HTTPException(status.HTTP_409_CONFLICT, detail="shop_in_review")

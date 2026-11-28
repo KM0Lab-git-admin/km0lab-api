@@ -29,7 +29,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -249,7 +249,12 @@ async def shop_request_of(db: AsyncSession, user: User) -> Shop | None:
                 Shop.contact_email == user.email,
                 Shop.status.in_((SHOP_REVIEW, SHOP_REJECTED)),
             )
-            .order_by(Shop.created_at.desc())
+            # The one still waiting first (asked again after a rejection),
+            # then the newest.
+            .order_by(
+                case((Shop.status == SHOP_REVIEW, 0), else_=1),
+                Shop.created_at.desc(),
+            )
         )
     ).scalars().first()
 
