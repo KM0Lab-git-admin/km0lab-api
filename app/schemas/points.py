@@ -19,6 +19,7 @@ class PointsHistoryItem(BaseModel):
     description: str | None = None
     title: str | None = None  # action / reward display name when known
     shop_name: str | None = None
+    shop_id: str | None = None
     reward_name: str | None = None
     ref_id: str | None = None
     created_at: datetime

@@ -41,8 +41,39 @@ def initial_status(flow: str) -> str:
     return "pending_use" if flow == "voucher_qr" else "requested"
 
 
-def _to_out(r: Redemption) -> RedemptionOut:
-    return RedemptionOut.model_validate(r)
+def _to_out(r: Redemption, shop: Shop | None = None) -> RedemptionOut:
+    out = RedemptionOut.model_validate(r)
+    if shop is None:
+        return out
+    return out.model_copy(
+        update={"shop_name": shop.name, "shop_address": shop.address}
+    )
+
+
+async def _out(db: AsyncSession, redemption: Redemption) -> RedemptionOut:
+    shop = None
+    if redemption.shop_id:
+        shop = await db.get(Shop, redemption.shop_id)
+    return _to_out(redemption, shop)
+
+
+async def _pickup_shop(
+    db: AsyncSession, reward: Reward, shop_id: str | None
+) -> str | None:
+    """A delivery may name a shop. A voucher never keeps one."""
+    if derive_flow(reward.type) != "delivery" or not shop_id:
+        return None
+    shop = await db.get(Shop, shop_id)
+    if (
+        shop is None
+        or shop.status != "active"
+        or shop.town_id != reward.town_id
+        or shop.is_fake != reward.is_fake
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, detail="invalid_pickup_shop"
+        )
+    return shop.id
 
 
 async def _load(db: AsyncSession, redemption_id: str) -> Redemption | None:
@@ -157,7 +188,7 @@ async def create_redemption(
         code=code,
         expires_at=expires_at,
         amount=payload.amount,
-        shop_id=payload.shop_id,
+        shop_id=await _pickup_shop(db, reward, payload.shop_id),
         is_fake=user.is_fake,
     )
     db.add(redemption)
@@ -193,7 +224,7 @@ async def create_redemption(
 
     await db.commit()
     redemption = await _load(db, redemption.id)
-    return _to_out(redemption)  # type: ignore[arg-type]
+    return await _out(db, redemption)  # type: ignore[arg-type]
 
 
 @router.get("", response_model=list[RedemptionOut])
@@ -228,7 +259,7 @@ async def list_redemptions(
         stmt = stmt.join(Reward).where(Reward.type == reward_type)
     stmt = stmt.order_by(Redemption.requested_at.desc())
     rows = (await db.execute(stmt)).scalars().unique().all()
-    return [_to_out(r) for r in rows]
+    return [await _out(db, r) for r in rows]
 
 
 async def _count_miss(db: AsyncSession, shop_id: str, exc: HTTPException) -> None:
@@ -282,7 +313,7 @@ async def validate_voucher(
     )
     await note_attempt(db, shop.id, success=True)
     redemption = await _load(db, redemption.id)
-    return _to_out(redemption)  # type: ignore[arg-type]
+    return await _out(db, redemption)  # type: ignore[arg-type]
 
 
 @router.patch("/{redemption_id}/status", response_model=RedemptionOut)
@@ -323,7 +354,7 @@ async def update_status(
     )
     await db.commit()
     redemption = await _load(db, redemption_id)
-    return _to_out(redemption)  # type: ignore[arg-type]
+    return await _out(db, redemption)  # type: ignore[arg-type]
 
 
 @router.post("/{redemption_id}/use", response_model=RedemptionOut)
@@ -356,4 +387,4 @@ async def use_voucher(
     )
     await db.commit()
     redemption = await _load(db, redemption_id)
-    return _to_out(redemption)  # type: ignore[arg-type]
+    return await _out(db, redemption)  # type: ignore[arg-type]

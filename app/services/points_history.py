@@ -128,11 +128,13 @@ async def _enrich_items(
     for tx in txs:
         title: str | None = None
         shop_name: str | None = None
+        shop_id: str | None = None
         reward_name: str | None = None
 
         if tx.type == "scan" and tx.ref_id and tx.ref_id in scans_by_id:
             scan = scans_by_id[tx.ref_id]
             shop = shops_by_id.get(scan.shop_id)
+            shop_id = scan.shop_id
             shop_name = shop.name if shop else None
             title = tx.description or (shop_name and f"QR scan at {shop_name}")
         elif (
@@ -161,6 +163,7 @@ async def _enrich_items(
                 description=tx.description,
                 title=title,
                 shop_name=shop_name,
+                shop_id=shop_id,
                 reward_name=reward_name,
                 ref_id=tx.ref_id,
                 created_at=tx.created_at,
