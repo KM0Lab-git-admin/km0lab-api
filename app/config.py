@@ -89,7 +89,11 @@ class Settings(BaseSettings):
     # aquí su identificador de cliente, que es público. Vacío = apagada.
     auth_providers: str = ""
     google_client_id: str = ""
-    facebook_client_id: str = ""
+    facebook_client_id: str = ""  # el identificador de la app en Meta
+    # Secreto de la app de Meta: con él se pregunta a Facebook si una
+    # credencial es válida y es para nuestra app. Solo en el entorno.
+    facebook_app_secret: str = ""
+    facebook_graph_version: str = "v27.0"
     apple_client_id: str = ""
 
     # OpenAI — used to auto-fill missing i18n languages on save.

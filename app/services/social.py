@@ -15,19 +15,26 @@ No credential of any network is stored: it is verified and thrown away.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable
 
+import httpx
 from jose import JWTError, jwt
 
 from app.config import get_settings
 from app.services.identities import (
     PROVIDER_APPLE,
+    PROVIDER_FACEBOOK,
     PROVIDER_GOOGLE,
     SOCIAL_PROVIDERS,
 )
 from app.services.oidc import CredentialRefused, verify_id_token
+
+logger = logging.getLogger("km0lab-api.social")
 
 LINK_PURPOSE = "link_identity"
 LINK_TOKEN_MINUTES = 15
@@ -62,11 +69,25 @@ def client_id(provider: str) -> str:
     return (getattr(get_settings(), f"{provider}_client_id", "") or "").strip()
 
 
+# What a network needs besides its client id before it can be offered:
+# without it the button would be there and every attempt would fail.
+REQUIRED_SETTINGS: dict[str, tuple[str, ...]] = {
+    PROVIDER_FACEBOOK: ("facebook_app_secret",),
+}
+
+
 def is_enabled(provider: str) -> bool:
-    listed = {
-        p.strip().lower() for p in (get_settings().auth_providers or "").split(",")
-    }
-    return provider in listed and provider in VERIFIERS and bool(client_id(provider))
+    settings = get_settings()
+    listed = {p.strip().lower() for p in (settings.auth_providers or "").split(",")}
+    return (
+        provider in listed
+        and provider in VERIFIERS
+        and bool(client_id(provider))
+        and all(
+            (getattr(settings, name, "") or "").strip()
+            for name in REQUIRED_SETTINGS.get(provider, ())
+        )
+    )
 
 
 def enabled_providers(platform: str | None = None) -> list[str]:
@@ -120,6 +141,99 @@ async def verify_google(credential: str) -> SocialProfile:
 
 
 VERIFIERS[PROVIDER_GOOGLE] = verify_google
+
+
+# ── Facebook ──────────────────────────────────────────────────────────
+# Facebook's button does not hand out a signed identity token: it gives the
+# app an access token, and anybody's server may only believe it after
+# asking Facebook. Two questions, as Meta's documentation says:
+#
+# 1. ``debug_token``, asked with our app's own token (app id + secret): is
+#    this token valid, and **was it issued for our app**? A valid token
+#    that some other app obtained from the same person must not get in.
+# 2. ``/me``, asked with the person's token and signed with our secret
+#    (``appsecret_proof``): who is it?
+#
+# The id Facebook gives is the person's id *for our app*. The email may be
+# missing, and Facebook does not say it has verified it: it is never
+# trusted to open or create an account ("your email is missing").
+
+FACEBOOK_GRAPH_URL = "https://graph.facebook.com"
+# Tests swap this for a make-believe Facebook.
+_facebook_transport: httpx.AsyncBaseTransport | None = None
+
+
+async def _ask_facebook(path: str, params: dict[str, str]) -> dict:
+    """One question to Facebook. A "no" is a refusal; Facebook not
+    answering is raised as it is ("try again", not "not valid")."""
+    settings = get_settings()
+    url = f"{FACEBOOK_GRAPH_URL}/{settings.facebook_graph_version}{path}"
+    async with httpx.AsyncClient(timeout=10.0, transport=_facebook_transport) as client:
+        response = await client.get(url, params=params)
+    if response.status_code >= 500:
+        response.raise_for_status()
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    if response.status_code >= 400:
+        error = body.get("error") if isinstance(body, dict) else None
+        error = error if isinstance(error, dict) else {}
+        # Said in the log without the credentials: if it is our own app
+        # token that Facebook rejects, every login fails and this is why.
+        logger.warning(
+            "Facebook said no to %s: %s %s (code %s)",
+            path,
+            response.status_code,
+            error.get("type"),
+            error.get("code"),
+        )
+        raise SocialRefused(f"facebook {response.status_code}")
+    return body if isinstance(body, dict) else {}
+
+
+async def verify_facebook(credential: str) -> SocialProfile:
+    settings = get_settings()
+    app_id = client_id(PROVIDER_FACEBOOK)
+    secret = (settings.facebook_app_secret or "").strip()
+    if not app_id or not secret:
+        raise SocialRefused("facebook is not configured")
+
+    checked = await _ask_facebook(
+        "/debug_token",
+        {"input_token": credential, "access_token": f"{app_id}|{secret}"},
+    )
+    data = checked.get("data")
+    data = data if isinstance(data, dict) else {}
+    if data.get("is_valid") is not True:
+        raise SocialRefused("token not valid")
+    if str(data.get("app_id") or "") != app_id:
+        raise SocialRefused("token issued for another app")
+    subject = str(data.get("user_id") or "")
+    if not subject:
+        raise SocialRefused("no user id")
+
+    proof = hmac.new(secret.encode(), credential.encode(), hashlib.sha256).hexdigest()
+    me = await _ask_facebook(
+        "/me",
+        {
+            "fields": "id,first_name,last_name,email",
+            "access_token": credential,
+            "appsecret_proof": proof,
+        },
+    )
+    if str(me.get("id") or "") != subject:
+        raise SocialRefused("the token and the profile are not the same person")
+    return SocialProfile(
+        subject=subject,
+        email=(me.get("email") or None),
+        email_verified=False,
+        first_name=me.get("first_name") or None,
+        last_name=me.get("last_name") or None,
+    )
+
+
+VERIFIERS[PROVIDER_FACEBOOK] = verify_facebook
 
 
 # ── "Your email is missing" ───────────────────────────────────────────

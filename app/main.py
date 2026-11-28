@@ -34,6 +34,9 @@ from app.services.sessions import check_signing_key
 from app.version import API_VERSION, AppVersionMiddleware, min_app_version
 
 logging.basicConfig(level=logging.INFO)
+# httpx writes the whole address of every request it makes. Some carry a
+# credential in it (asking Facebook about a token): never in the log.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 settings = get_settings()
 
 

@@ -43,6 +43,7 @@ def networks(monkeypatch):
     monkeypatch.setattr(settings, "auth_providers", "google, facebook")
     monkeypatch.setattr(settings, "google_client_id", "google-client")
     monkeypatch.setattr(settings, "facebook_client_id", "facebook-app")
+    monkeypatch.setattr(settings, "facebook_app_secret", "facebook-secret")
     monkeypatch.setitem(social.VERIFIERS, "google", _fake_network)
     monkeypatch.setitem(social.VERIFIERS, "facebook", _fake_network)
 
@@ -100,7 +101,7 @@ async def test_a_network_is_offered_only_when_it_is_switched_on(client, monkeypa
 
     monkeypatch.setattr(settings, "google_client_id", "google-client")
     monkeypatch.setattr(settings, "apple_client_id", "com.km0lab.web")
-    # Facebook has an id but nothing here that can verify it: off.
+    # Facebook has an id but not the secret it needs to ask Facebook: off.
     monkeypatch.setattr(settings, "facebook_client_id", "facebook-app")
     web = [
         {"provider": "google", "client_id": "google-client"},
