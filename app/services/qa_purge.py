@@ -21,28 +21,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
     InvitationConversion,
-    InvitationEvent,
     InvitationLink,
     Locality,
     OtpCode,
     PointAction,
     PointsTransaction,
-    Promotion,
     QrScan,
     Redemption,
-    RedemptionEvent,
     Reward,
     RewardMedia,
     RewardShop,
     Shop,
     ShopMedia,
-    VoucherAttempt,
     ShopPayment,
     Town,
     TownMedia,
     TownPostalCode,
     User,
-    UserIdentity,
 )
 from app.qa import (
     QA_EMAIL_LIKE,
@@ -52,6 +47,7 @@ from app.qa import (
     QA_SLUG_PREFIX,
     is_qa_email,
 )
+from app.services.account_erasure import erase_account_graph
 from app.services.qa_territory import QA_FIXTURE_SHOP_IDS
 
 
@@ -343,75 +339,20 @@ async def purge_qa_territory(
     if dry_run:
         return report
 
-    # ── Delete, children first ────────────────────────────────────────
-    await db.execute(
-        delete(InvitationConversion).where(
-            InvitationConversion.id.in_(conv_ids)
-        )
+    # Same order as a rehearsal cleanup. Orphan invitation rewards are
+    # undone here because a fixture account can outlive the invitation.
+    await erase_account_graph(
+        db,
+        user_ids=user_ids,
+        emails=emails,
+        shop_ids=shop_ids,
+        redemption_ids=red_ids,
+        scan_ids=scan_ids,
+        link_ids=link_ids,
+        conversion_ids=conv_ids,
+        transaction_ids=[t.id for t in transactions],
+        orphan_transactions=orphan_txs,
     )
-    for tx in orphan_txs:
-        owner = await db.get(User, tx.user_id)
-        if owner is not None:
-            owner.points = owner.points - tx.points
-        await db.delete(tx)
-    await db.flush()
-    await db.execute(
-        delete(InvitationEvent).where(
-            or_(
-                InvitationEvent.actor_user_id.in_(user_ids),
-                InvitationEvent.link_id.in_(link_ids),
-            )
-        )
-    )
-    await db.execute(
-        delete(InvitationLink).where(InvitationLink.id.in_(link_ids))
-    )
-    await db.execute(
-        delete(RedemptionEvent).where(
-            RedemptionEvent.redemption_id.in_(red_ids)
-        )
-    )
-    await db.execute(delete(Redemption).where(Redemption.id.in_(red_ids)))
-    await db.execute(delete(QrScan).where(QrScan.id.in_(scan_ids)))
-    await db.execute(
-        delete(PointsTransaction).where(
-            PointsTransaction.id.in_([t.id for t in transactions])
-        )
-    )
-    await db.execute(delete(OtpCode).where(OtpCode.email.in_(emails)))
-    # MySQL would cascade; said out loud so every database does the same.
-    await db.execute(
-        delete(UserIdentity).where(UserIdentity.user_id.in_(user_ids))
-    )
-    await db.execute(delete(User).where(User.id.in_(user_ids)))
-
-    if shop_ids:
-        # Rows we keep that still point at these shops (runs mode only:
-        # in full mode the checks above guarantee there are none).
-        await db.execute(
-            update(User).where(User.shop_id.in_(shop_ids)).values(shop_id=None)
-        )
-        await db.execute(
-            update(Redemption)
-            .where(Redemption.shop_id.in_(shop_ids))
-            .values(shop_id=None)
-        )
-        await db.execute(
-            delete(Promotion).where(Promotion.shop_id.in_(shop_ids))
-        )
-        await db.execute(
-            delete(RewardShop).where(RewardShop.shop_id.in_(shop_ids))
-        )
-        await db.execute(
-            delete(ShopPayment).where(ShopPayment.shop_id.in_(shop_ids))
-        )
-        await db.execute(
-            delete(ShopMedia).where(ShopMedia.shop_id.in_(shop_ids))
-        )
-        await db.execute(
-            delete(VoucherAttempt).where(VoucherAttempt.shop_id.in_(shop_ids))
-        )
-        await db.execute(delete(Shop).where(Shop.id.in_(shop_ids)))
 
     if everything and town_ids:
         reward_ids = [r.id for r in rewards]
